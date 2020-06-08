@@ -10,7 +10,9 @@ import (
 	"unsafe"
 )
 
-type mOS struct{}
+type mOS struct {
+	waitsema uintptr // semaphore for parking on locks
+}
 
 //go:noescape
 func futex(addr unsafe.Pointer, op int32, val uint32, ts, addr2 unsafe.Pointer, val3 uint32) int32
