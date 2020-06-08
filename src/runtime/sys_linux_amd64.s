@@ -1,4 +1,5 @@
 // Copyright 2009 The Go Authors. All rights reserved.
+// Copyright 2020 Edgeless Systems GmbH. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -54,7 +55,7 @@
 TEXT runtime·exit(SB),NOSPLIT,$0-4
 	MOVL	code+0(FP), DI
 	MOVL	$SYS_exit_group, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	RET
 
 // func exitThread(wait *uint32)
@@ -64,7 +65,7 @@ TEXT runtime·exitThread(SB),NOSPLIT,$0-8
 	MOVL	$0, (AX)
 	MOVL	$0, DI	// exit code
 	MOVL	$SYS_exit, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	// We may not even have a stack any more.
 	INT	$3
 	JMP	0(PC)
@@ -76,7 +77,7 @@ TEXT runtime·open(SB),NOSPLIT,$0-20
 	MOVL	mode+8(FP), DX
 	MOVL	perm+12(FP), R10
 	MOVL	$SYS_openat, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
 	MOVL	$-1, AX
@@ -86,7 +87,7 @@ TEXT runtime·open(SB),NOSPLIT,$0-20
 TEXT runtime·closefd(SB),NOSPLIT,$0-12
 	MOVL	fd+0(FP), DI
 	MOVL	$SYS_close, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
 	MOVL	$-1, AX
@@ -98,7 +99,7 @@ TEXT runtime·write1(SB),NOSPLIT,$0-28
 	MOVQ	p+8(FP), SI
 	MOVL	n+16(FP), DX
 	MOVL	$SYS_write, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -107,7 +108,7 @@ TEXT runtime·read(SB),NOSPLIT,$0-28
 	MOVQ	p+8(FP), SI
 	MOVL	n+16(FP), DX
 	MOVL	$SYS_read, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -115,7 +116,7 @@ TEXT runtime·read(SB),NOSPLIT,$0-28
 TEXT runtime·pipe(SB),NOSPLIT,$0-12
 	LEAQ	r+0(FP), DI
 	MOVL	$SYS_pipe, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, errno+8(FP)
 	RET
 
@@ -124,7 +125,7 @@ TEXT runtime·pipe2(SB),NOSPLIT,$0-20
 	LEAQ	r+8(FP), DI
 	MOVL	flags+0(FP), SI
 	MOVL	$SYS_pipe2, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, errno+16(FP)
 	RET
 
@@ -142,40 +143,40 @@ TEXT runtime·usleep(SB),NOSPLIT,$16
 	MOVQ	SP, DI
 	MOVL	$0, SI
 	MOVL	$SYS_nanosleep, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	RET
 
 TEXT runtime·gettid(SB),NOSPLIT,$0-4
 	MOVL	$SYS_gettid, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+0(FP)
 	RET
 
 TEXT runtime·raise(SB),NOSPLIT,$0
 	MOVL	$SYS_getpid, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, R12
 	MOVL	$SYS_gettid, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, SI	// arg 2 tid
 	MOVL	R12, DI	// arg 1 pid
 	MOVL	sig+0(FP), DX	// arg 3
 	MOVL	$SYS_tgkill, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	RET
 
 TEXT runtime·raiseproc(SB),NOSPLIT,$0
 	MOVL	$SYS_getpid, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, DI	// arg 1 pid
 	MOVL	sig+0(FP), SI	// arg 2
 	MOVL	$SYS_kill, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	RET
 
 TEXT ·getpid(SB),NOSPLIT,$0-8
 	MOVL	$SYS_getpid, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVQ	AX, ret+0(FP)
 	RET
 
@@ -184,7 +185,7 @@ TEXT ·tgkill(SB),NOSPLIT,$0
 	MOVQ	tid+8(FP), SI
 	MOVQ	sig+16(FP), DX
 	MOVL	$SYS_tgkill, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	RET
 
 TEXT runtime·setitimer(SB),NOSPLIT,$0-24
@@ -192,7 +193,7 @@ TEXT runtime·setitimer(SB),NOSPLIT,$0-24
 	MOVQ	new+8(FP), SI
 	MOVQ	old+16(FP), DX
 	MOVL	$SYS_setittimer, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	RET
 
 TEXT runtime·mincore(SB),NOSPLIT,$0-28
@@ -200,7 +201,7 @@ TEXT runtime·mincore(SB),NOSPLIT,$0-28
 	MOVQ	n+8(FP), SI
 	MOVQ	dst+16(FP), DX
 	MOVL	$SYS_mincore, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -329,7 +330,7 @@ TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
 	MOVQ	old+16(FP), DX
 	MOVL	size+24(FP), R10
 	MOVL	$SYS_rt_sigprocmask, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
 	MOVL	$0xf1, 0xf1  // crash
@@ -341,7 +342,7 @@ TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
 	MOVQ	old+16(FP), DX
 	MOVQ	size+24(FP), R10
 	MOVL	$SYS_rt_sigaction, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+32(FP)
 	RET
 
@@ -479,7 +480,7 @@ sigtrampnog:
 // https://gcc.gnu.org/viewcvs/gcc/trunk/libgcc/config/i386/linux-unwind.h?revision=219188&view=markup
 TEXT runtime·sigreturn(SB),NOSPLIT,$0
 	MOVQ	$SYS_rt_sigreturn, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	INT $3	// not reached
 
 TEXT runtime·sysMmap(SB),NOSPLIT,$0
@@ -491,7 +492,7 @@ TEXT runtime·sysMmap(SB),NOSPLIT,$0
 	MOVL	off+28(FP), R9
 
 	MOVL	$SYS_mmap, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	ok
 	NOTQ	AX
@@ -526,7 +527,7 @@ TEXT runtime·sysMunmap(SB),NOSPLIT,$0
 	MOVQ	addr+0(FP), DI
 	MOVQ	n+8(FP), SI
 	MOVQ	$SYS_munmap, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
 	MOVL	$0xf1, 0xf1  // crash
@@ -550,7 +551,7 @@ TEXT runtime·madvise(SB),NOSPLIT,$0
 	MOVQ	n+8(FP), SI
 	MOVL	flags+16(FP), DX
 	MOVQ	$SYS_madvise, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -564,7 +565,7 @@ TEXT runtime·futex(SB),NOSPLIT,$0
 	MOVQ	addr2+24(FP), R8
 	MOVL	val3+32(FP), R9
 	MOVL	$SYS_futex, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+40(FP)
 	RET
 
@@ -582,7 +583,7 @@ TEXT runtime·clone(SB),NOSPLIT,$0
 	MOVQ	fn+32(FP), R12
 
 	MOVL	$SYS_clone, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 
 	// In parent, return.
 	CMPQ	AX, $0
@@ -601,7 +602,7 @@ TEXT runtime·clone(SB),NOSPLIT,$0
 
 	// Initialize m->procid to Linux tid
 	MOVL	$SYS_gettid, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVQ	AX, m_procid(R8)
 
 	// Set FS to point at m->tls.
@@ -621,14 +622,14 @@ nog:
 	// It shouldn't return. If it does, exit that thread.
 	MOVL	$111, DI
 	MOVL	$SYS_exit, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	JMP	-3(PC)	// keep exiting
 
 TEXT runtime·sigaltstack(SB),NOSPLIT,$-8
 	MOVQ	new+0(FP), DI
 	MOVQ	old+8(FP), SI
 	MOVQ	$SYS_sigaltstack, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
 	MOVL	$0xf1, 0xf1  // crash
@@ -645,7 +646,7 @@ TEXT runtime·settls(SB),NOSPLIT,$32
 	MOVQ	DI, SI
 	MOVQ	$0x1002, DI	// ARCH_SET_FS
 	MOVQ	$SYS_arch_prctl, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
 	MOVL	$0xf1, 0xf1  // crash
@@ -653,7 +654,7 @@ TEXT runtime·settls(SB),NOSPLIT,$32
 
 TEXT runtime·osyield(SB),NOSPLIT,$0
 	MOVL	$SYS_sched_yield, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	RET
 
 TEXT runtime·sched_getaffinity(SB),NOSPLIT,$0
@@ -661,7 +662,7 @@ TEXT runtime·sched_getaffinity(SB),NOSPLIT,$0
 	MOVQ	len+8(FP), SI
 	MOVQ	buf+16(FP), DX
 	MOVL	$SYS_sched_getaffinity, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -669,7 +670,7 @@ TEXT runtime·sched_getaffinity(SB),NOSPLIT,$0
 TEXT runtime·epollcreate(SB),NOSPLIT,$0
 	MOVL    size+0(FP), DI
 	MOVL    $SYS_epoll_create, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+8(FP)
 	RET
 
@@ -677,7 +678,7 @@ TEXT runtime·epollcreate(SB),NOSPLIT,$0
 TEXT runtime·epollcreate1(SB),NOSPLIT,$0
 	MOVL	flags+0(FP), DI
 	MOVL	$SYS_epoll_create1, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+8(FP)
 	RET
 
@@ -688,7 +689,7 @@ TEXT runtime·epollctl(SB),NOSPLIT,$0
 	MOVL	fd+8(FP), DX
 	MOVQ	ev+16(FP), R10
 	MOVL	$SYS_epoll_ctl, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -701,7 +702,7 @@ TEXT runtime·epollwait(SB),NOSPLIT,$0
 	MOVL	timeout+20(FP), R10
 	MOVQ	$0, R8
 	MOVL	$SYS_epoll_pwait, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -711,7 +712,7 @@ TEXT runtime·closeonexec(SB),NOSPLIT,$0
 	MOVQ    $2, SI  // F_SETFD
 	MOVQ    $1, DX  // FD_CLOEXEC
 	MOVL	$SYS_fcntl, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	RET
 
 // func runtime·setNonblock(int32 fd)
@@ -720,13 +721,13 @@ TEXT runtime·setNonblock(SB),NOSPLIT,$0-4
 	MOVQ    $3, SI  // F_GETFL
 	MOVQ    $0, DX
 	MOVL	$SYS_fcntl, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	fd+0(FP), DI // fd
 	MOVQ	$4, SI // F_SETFL
 	MOVQ	$0x800, DX // O_NONBLOCK
 	ORL	AX, DX
 	MOVL	$SYS_fcntl, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	RET
 
 // int access(const char *name, int mode)
@@ -737,7 +738,7 @@ TEXT runtime·access(SB),NOSPLIT,$0
 	MOVL	mode+8(FP), DX
 	MOVL	$0, R10
 	MOVL	$SYS_faccessat, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+16(FP)
 	RET
 
@@ -747,7 +748,7 @@ TEXT runtime·connect(SB),NOSPLIT,$0-28
 	MOVQ	addr+8(FP), SI
 	MOVL	len+16(FP), DX
 	MOVL	$SYS_connect, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -757,7 +758,7 @@ TEXT runtime·socket(SB),NOSPLIT,$0-20
 	MOVL	typ+4(FP), SI
 	MOVL	prot+8(FP), DX
 	MOVL	$SYS_socket, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVL	AX, ret+16(FP)
 	RET
 
@@ -766,7 +767,7 @@ TEXT runtime·sbrk0(SB),NOSPLIT,$0-8
 	// Implemented as brk(NULL).
 	MOVQ	$0, DI
 	MOVL	$SYS_brk, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVQ	AX, ret+0(FP)
 	RET
 
@@ -774,7 +775,7 @@ TEXT runtime·sbrk0(SB),NOSPLIT,$0-8
 TEXT ·uname(SB),NOSPLIT,$0-16
 	MOVQ    utsname+0(FP), DI
 	MOVL    $SYS_uname, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVQ	AX, ret+8(FP)
 	RET
 
@@ -783,6 +784,48 @@ TEXT ·mlock(SB),NOSPLIT,$0-24
 	MOVQ    addr+0(FP), DI
 	MOVQ    len+8(FP), SI
 	MOVL    $SYS_mlock, AX
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVQ	AX, ret+16(FP)
+	RET
+
+// EDG: This function is called in place of the SYSCALL instruction.
+TEXT runtime·invoke_libc_syscall(SB),NOSPLIT,$0
+	// syscall args in rdi, rsi, rdx, r10, r8, r9
+	// syscall number in rax
+
+	// Switch to g0 stack. See comment above in runtime·walltime.
+	MOVQ	SP, BP	// Save old SP; BP unchanged by C code.
+	get_tls(CX)
+	MOVQ	g(CX), CX
+	TESTQ	CX, CX
+	JE	noswitch
+	MOVQ	g_m(CX), BX // BX unchanged by C code.
+	CMPQ	CX, m_curg(BX)	// Only switch if on curg.
+	JNE	noswitch
+	MOVQ	m_g0(BX), CX
+	MOVQ	(g_sched+gobuf_sp)(CX), SP	// Set SP to g0 stack
+noswitch:
+	ANDQ	$~15, SP	// Align for C code
+	SUBQ	$16, SP
+	// Call
+	// long syscall(long number, ...);
+	// with System V AMD64 calling convention:
+	// first 6 args in rdi, rsi, rdx, rcx, r8, r9
+	// additional args on the stack
+	MOVQ	R9, (SP)
+	MOVQ	R8, R9
+	MOVQ	R10, R8
+	MOVQ	DX, CX
+	MOVQ	SI, DX
+	MOVQ	DI, SI
+	MOVQ	AX, DI
+	CALL 	libc_syscall(SB)
+	MOVQ	BP, SP		// Restore real SP
+	CMPQ	AX, $-1
+	JE	err
+	RET
+err:
+	CALL	libc_errno(SB)
+	MOVQ	(AX), AX
+	NEGQ	AX
 	RET
