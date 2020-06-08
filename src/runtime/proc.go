@@ -622,7 +622,8 @@ func mcommoninit(mp *m) {
 	checkmcount()
 
 	mp.fastrand[0] = uint32(int64Hash(uint64(mp.id), fastrandseed))
-	mp.fastrand[1] = uint32(int64Hash(uint64(cputicks()), ^fastrandseed))
+	// EDG: use nanotime instead of cputicks (rdtsc)
+	mp.fastrand[1] = uint32(int64Hash(uint64(nanotime()), ^fastrandseed))
 	if mp.fastrand[0]|mp.fastrand[1] == 0 {
 		mp.fastrand[1] = 1
 	}

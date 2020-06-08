@@ -96,6 +96,8 @@ func semacquire(addr *uint32) {
 }
 
 func semacquire1(addr *uint32, lifo bool, profile semaProfileFlags, skipframes int) {
+	profile = 0 // EDG: never profile (requires rdtsc)
+
 	gp := getg()
 	if gp != gp.m.curg {
 		throw("semacquire not on the G stack")

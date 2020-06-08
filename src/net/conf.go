@@ -69,7 +69,9 @@ func initConfVal() {
 	// Darwin pops up annoying dialog boxes if programs try to do
 	// their own DNS requests. So always use cgo instead, which
 	// avoids that.
-	if runtime.GOOS == "darwin" {
+	// EDG: always use cgo resolver
+	//if runtime.GOOS == "darwin" {
+	{
 		confVal.forceCgoLookupHost = true
 		return
 	}

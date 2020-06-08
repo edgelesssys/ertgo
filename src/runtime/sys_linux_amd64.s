@@ -239,10 +239,10 @@ noswitch:
 
 	MOVQ	runtime·vdsoClockgettimeSym(SB), AX
 	CMPQ	AX, $0
-	JEQ	fallback
+//	JEQ	fallback
 	MOVL	$0, DI // CLOCK_REALTIME
 	LEAQ	0(SP), SI
-	CALL	AX
+	CALL	libc_clock_gettime(SB)	// EDG: use libc
 	MOVQ	0(SP), AX	// sec
 	MOVQ	8(SP), DX	// nsec
 	MOVQ	BP, SP		// Restore real SP
@@ -293,10 +293,10 @@ noswitch:
 
 	MOVQ	runtime·vdsoClockgettimeSym(SB), AX
 	CMPQ	AX, $0
-	JEQ	fallback
+//	JEQ	fallback
 	MOVL	$1, DI // CLOCK_MONOTONIC
 	LEAQ	0(SP), SI
-	CALL	AX
+	CALL	libc_clock_gettime(SB)	// EDG: use libc
 	MOVQ	0(SP), AX	// sec
 	MOVQ	8(SP), DX	// nsec
 	MOVQ	BP, SP		// Restore real SP

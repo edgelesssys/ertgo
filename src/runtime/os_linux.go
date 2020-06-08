@@ -5,7 +5,6 @@
 package runtime
 
 import (
-	"runtime/internal/atomic"
 	"runtime/internal/sys"
 	"unsafe"
 )
@@ -495,8 +494,9 @@ var touchStackBeforeSignal uint32
 
 // signalM sends a signal to mp.
 func signalM(mp *m, sig int) {
-	if atomic.Load(&touchStackBeforeSignal) != 0 {
+	// EDG: signals not supported
+	/*if atomic.Load(&touchStackBeforeSignal) != 0 {
 		atomic.Cas((*uint32)(unsafe.Pointer(mp.gsignal.stack.hi-4)), 0, 0)
 	}
-	tgkill(getpid(), int(mp.procid), sig)
+	tgkill(getpid(), int(mp.procid), sig)*/
 }

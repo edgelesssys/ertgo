@@ -34,7 +34,9 @@ func netpollinit() {
 		}
 		closeonexec(epfd)
 	}
-	r, w, errno := nonblockingPipe()
+	// EDG: We don't have pipe. We may implement it with eventfd.
+	// However, `go test -run NetpollBreak` succeeds without it.
+	/*r, w, errno := nonblockingPipe()
 	if errno != 0 {
 		println("runtime: pipe failed with", -errno)
 		throw("runtime: pipe failed")
@@ -49,7 +51,7 @@ func netpollinit() {
 		throw("runtime: epollctl failed")
 	}
 	netpollBreakRd = uintptr(r)
-	netpollBreakWr = uintptr(w)
+	netpollBreakWr = uintptr(w)*/
 }
 
 func netpollIsPollDescriptor(fd uintptr) bool {
@@ -74,7 +76,8 @@ func netpollarm(pd *pollDesc, mode int) {
 
 // netpollBreak interrupts an epollwait.
 func netpollBreak() {
-	for {
+	// EDG: see comment in netpollinit
+	/*for {
 		var b byte
 		n := write(netpollBreakWr, unsafe.Pointer(&b), 1)
 		if n == 1 {
@@ -88,7 +91,7 @@ func netpollBreak() {
 		}
 		println("runtime: netpollBreak write failed with", -n)
 		throw("runtime: netpollBreak write failed")
-	}
+	}*/
 }
 
 // netpoll checks for ready network connections.

@@ -621,7 +621,13 @@ func (p *pp) handleMethods(verb rune) (handled bool) {
 			case error:
 				handled = true
 				defer p.catchPanic(p.arg, verb, "Error")
-				p.fmtString(v.Error(), verb)
+				//p.fmtString(v.Error(), verb)
+				// EDG: catchPanic not supported by ERT yet, so check nil
+				if reflect.ValueOf(v).IsNil() {
+					p.buf.writeString(nilAngleString)
+				} else {
+					p.fmtString(v.Error(), verb)
+				}
 				return
 
 			case Stringer:
