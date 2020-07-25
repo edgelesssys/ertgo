@@ -13,6 +13,6 @@ const defaultGOOS = runtime.GOOS
 const defaultGOARCH = runtime.GOARCH
 const defaultGO_EXTLINK_ENABLED = ``
 const defaultGO_LDSO = ``
-const version = `go1.14.4`
+const version = `go1.14.6`
 const stackGuardMultiplierDefault = 1
 const goexperiment = ``
