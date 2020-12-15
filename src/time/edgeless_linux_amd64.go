@@ -21,6 +21,8 @@ int* libc_errno(void) {
 }
 
 int libc_clock_gettime(clockid_t clockid, struct timespec* tp) { return clock_gettime(clockid, tp); }
+
+__attribute__((section(".oeinfo"))) volatile const char oe_enclave_properties_sgx[0x1000];
 */
 import "C"
 
