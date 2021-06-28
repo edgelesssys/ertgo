@@ -106,10 +106,10 @@ const (
 
 	// General registers reassigned to ABI names.
 	REG_ZERO = REG_X0
-	REG_RA   = REG_X1
+	REG_RA   = REG_X1 // aka REG_LR
 	REG_SP   = REG_X2
 	REG_GP   = REG_X3 // aka REG_SB
-	REG_TP   = REG_X4 // aka REG_G
+	REG_TP   = REG_X4
 	REG_T0   = REG_X5
 	REG_T1   = REG_X6
 	REG_T2   = REG_X7
@@ -125,24 +125,24 @@ const (
 	REG_A7   = REG_X17
 	REG_S2   = REG_X18
 	REG_S3   = REG_X19
-	REG_S4   = REG_X20
+	REG_S4   = REG_X20 // aka REG_CTXT
 	REG_S5   = REG_X21
 	REG_S6   = REG_X22
 	REG_S7   = REG_X23
 	REG_S8   = REG_X24
 	REG_S9   = REG_X25
 	REG_S10  = REG_X26
-	REG_S11  = REG_X27
+	REG_S11  = REG_X27 // aka REG_G
 	REG_T3   = REG_X28
 	REG_T4   = REG_X29
 	REG_T5   = REG_X30
-	REG_T6   = REG_X31
+	REG_T6   = REG_X31 // aka REG_TMP
 
 	// Go runtime register names.
-	REG_G    = REG_TP // G pointer.
-	REG_CTXT = REG_S4 // Context for closures.
-	REG_LR   = REG_RA // Link register.
-	REG_TMP  = REG_T6 // Reserved for assembler use.
+	REG_G    = REG_S11 // G pointer.
+	REG_CTXT = REG_S4  // Context for closures.
+	REG_LR   = REG_RA  // Link register.
+	REG_TMP  = REG_T6  // Reserved for assembler use.
 
 	// ABI names for floating point registers.
 	REG_FT0  = REG_F0
@@ -576,6 +576,16 @@ const (
 
 	// Pseudo-instructions.  These get translated by the assembler into other
 	// instructions, based on their operands.
+	ABEQZ
+	ABGEZ
+	ABGT
+	ABGTU
+	ABGTZ
+	ABLE
+	ABLEU
+	ABLEZ
+	ABLTZ
+	ABNEZ
 	AFNEGD
 	AFNEGS
 	AFNED
@@ -589,6 +599,9 @@ const (
 	AMOVHU
 	AMOVW
 	AMOVWU
+	ANEG
+	ANEGW
+	ANOT
 	ASEQZ
 	ASNEZ
 

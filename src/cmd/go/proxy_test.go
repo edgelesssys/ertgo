@@ -12,7 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -74,12 +74,12 @@ func StartProxy() {
 var modList []module.Version
 
 func readModList() {
-	infos, err := ioutil.ReadDir("testdata/mod")
+	files, err := os.ReadDir("testdata/mod")
 	if err != nil {
 		log.Fatal(err)
 	}
-	for _, info := range infos {
-		name := info.Name()
+	for _, f := range files {
+		name := f.Name()
 		if !strings.HasSuffix(name, ".txt") {
 			continue
 		}
@@ -91,7 +91,7 @@ func readModList() {
 		encPath := strings.ReplaceAll(name[:i], "_", "/")
 		path, err := module.UnescapePath(encPath)
 		if err != nil {
-			if encPath != "example.com/invalidpath/v1" {
+			if testing.Verbose() && encPath != "example.com/invalidpath/v1" {
 				fmt.Fprintf(os.Stderr, "go proxy_test: %v\n", err)
 			}
 			continue
@@ -131,11 +131,10 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Path[len("/mod/"):]
 
-	// /mod/quiet/ does not print errors.
-	quiet := false
-	if strings.HasPrefix(path, "quiet/") {
-		path = path[len("quiet/"):]
-		quiet = true
+	// /mod/invalid returns faulty responses.
+	if strings.HasPrefix(path, "invalid/") {
+		w.Write([]byte("invalid"))
+		return
 	}
 
 	// Next element may opt into special behavior.
@@ -174,6 +173,25 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Request for $GOPROXY/redirect/<count>/... goes to redirects.
+	if strings.HasPrefix(path, "redirect/") {
+		path = path[len("redirect/"):]
+		if j := strings.Index(path, "/"); j >= 0 {
+			count, err := strconv.Atoi(path[:j])
+			if err != nil {
+				return
+			}
+
+			// The last redirect.
+			if count <= 1 {
+				http.Redirect(w, r, fmt.Sprintf("/mod/%s", path[j+1:]), 302)
+				return
+			}
+			http.Redirect(w, r, fmt.Sprintf("/mod/redirect/%d/%s", count-1, path[j+1:]), 302)
+			return
+		}
+	}
+
 	// Request for $GOPROXY/sumdb/<name>/supported
 	// is checking whether it's OK to access sumdb via the proxy.
 	if path == "sumdb/"+testSumDBName+"/supported" {
@@ -195,7 +213,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		enc := path[:i]
 		modPath, err := module.UnescapePath(enc)
 		if err != nil {
-			if !quiet {
+			if testing.Verbose() {
 				fmt.Fprintf(os.Stderr, "go proxy_test: %v\n", err)
 			}
 			http.NotFound(w, r)
@@ -248,7 +266,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	enc, file := path[:i], path[i+len("/@v/"):]
 	path, err := module.UnescapePath(enc)
 	if err != nil {
-		if !quiet {
+		if testing.Verbose() {
 			fmt.Fprintf(os.Stderr, "go proxy_test: %v\n", err)
 		}
 		http.NotFound(w, r)
@@ -314,10 +332,10 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	a, err := readArchive(path, vers)
 	if err != nil {
-		if !quiet {
+		if testing.Verbose() {
 			fmt.Fprintf(os.Stderr, "go proxy: no archive %s %s: %v\n", path, vers, err)
 		}
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) {
 			http.NotFound(w, r)
 		} else {
 			http.Error(w, "cannot load archive", 500)
@@ -368,7 +386,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}).(cached)
 
 		if c.err != nil {
-			if !quiet {
+			if testing.Verbose() {
 				fmt.Fprintf(os.Stderr, "go proxy: %v\n", c.err)
 			}
 			http.Error(w, c.err.Error(), 500)
@@ -425,7 +443,7 @@ func readArchive(path, vers string) (*txtar.Archive, error) {
 		return a
 	}).(*txtar.Archive)
 	if a == nil {
-		return nil, os.ErrNotExist
+		return nil, fs.ErrNotExist
 	}
 	return a, nil
 }
@@ -452,13 +470,13 @@ func proxyGoSum(path, vers string) ([]byte, error) {
 	}
 	h1, err := dirhash.Hash1(names, func(name string) (io.ReadCloser, error) {
 		data := files[name]
-		return ioutil.NopCloser(bytes.NewReader(data)), nil
+		return io.NopCloser(bytes.NewReader(data)), nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	h1mod, err := dirhash.Hash1([]string{"go.mod"}, func(string) (io.ReadCloser, error) {
-		return ioutil.NopCloser(bytes.NewReader(gomod)), nil
+		return io.NopCloser(bytes.NewReader(gomod)), nil
 	})
 	if err != nil {
 		return nil, err

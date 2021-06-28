@@ -751,6 +751,7 @@ func (q nat) divBasic(u, v nat) {
 
 	// D2.
 	vn1 := v[n-1]
+	rec := reciprocalWord(vn1)
 	for j := m; j >= 0; j-- {
 		// D3.
 		qhat := Word(_M)
@@ -760,7 +761,7 @@ func (q nat) divBasic(u, v nat) {
 		}
 		if ujn != vn1 {
 			var rhat Word
-			qhat, rhat = divWW(ujn, u[j+n-1], vn1)
+			qhat, rhat = divWW(ujn, u[j+n-1], vn1, rec)
 
 			// x1 | x2 = q̂v_{n-2}
 			vn2 := v[n-2]
@@ -880,7 +881,7 @@ func (z nat) divRecursiveStep(u, v nat, depth int, tmp *nat, temps []*nat) {
 		// then floor(u1/v1) >= floor(u/v)
 		//
 		// Moreover, the difference is at most 2 if len(v1) >= len(u/v)
-		// We choose s = B-1 since len(v)-B >= B+1 >= len(u/v)
+		// We choose s = B-1 since len(v)-s >= B+1 >= len(u/v)
 		s := (B - 1)
 		// Except for the first step, the top bits are always
 		// a division remainder, so the quotient length is <= n.
@@ -928,7 +929,7 @@ func (z nat) divRecursiveStep(u, v nat, depth int, tmp *nat, temps []*nat) {
 
 	// Now u < (v<<B), compute lower bits in the same way.
 	// Choose shift = B-1 again.
-	s := B
+	s := B - 1
 	qhat := *temps[depth]
 	qhat.clear()
 	qhat.divRecursiveStep(u[s:].norm(), v[s:], depth+1, tmp, temps)
@@ -1476,19 +1477,26 @@ func (z nat) expNNMontgomery(x, y, m nat) nat {
 }
 
 // bytes writes the value of z into buf using big-endian encoding.
-// len(buf) must be >= len(z)*_S. The value of z is encoded in the
-// slice buf[i:]. The number i of unused bytes at the beginning of
-// buf is returned as result.
+// The value of z is encoded in the slice buf[i:]. If the value of z
+// cannot be represented in buf, bytes panics. The number i of unused
+// bytes at the beginning of buf is returned as result.
 func (z nat) bytes(buf []byte) (i int) {
 	i = len(buf)
 	for _, d := range z {
 		for j := 0; j < _S; j++ {
 			i--
-			buf[i] = byte(d)
+			if i >= 0 {
+				buf[i] = byte(d)
+			} else if byte(d) != 0 {
+				panic("math/big: buffer too small to fit value")
+			}
 			d >>= 8
 		}
 	}
 
+	if i < 0 {
+		i = 0
+	}
 	for i < len(buf) && buf[i] == 0 {
 		i++
 	}

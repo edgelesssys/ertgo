@@ -52,6 +52,7 @@ import (
 	"go/types"
 	"internal/testenv"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"log"
 	"os"
@@ -89,14 +90,14 @@ func TestFormats(t *testing.T) {
 	testenv.MustHaveGoBuild(t) // more restrictive than necessary, but that's ok
 
 	// process all directories
-	filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+	filepath.WalkDir(".", func(path string, info fs.DirEntry, err error) error {
 		if info.IsDir() {
 			if info.Name() == "testdata" {
 				return filepath.SkipDir
 			}
 
 			importPath := filepath.Join("cmd/compile", path)
-			if blacklistedPackages[filepath.ToSlash(importPath)] {
+			if ignoredPackages[filepath.ToSlash(importPath)] {
 				return filepath.SkipDir
 			}
 
@@ -344,8 +345,7 @@ func collectPkgFormats(t *testing.T, pkg *build.Package) {
 	for index, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
 			if call, ok := n.(*ast.CallExpr); ok {
-				// ignore blacklisted functions
-				if blacklistedFunctions[nodeString(call.Fun)] {
+				if ignoredFunctions[nodeString(call.Fun)] {
 					return true
 				}
 				// look for an arguments that might be a format string
@@ -354,7 +354,7 @@ func collectPkgFormats(t *testing.T, pkg *build.Package) {
 						// make sure we have enough arguments
 						n := numFormatArgs(s)
 						if i+1+n > len(call.Args) {
-							t.Errorf("%s: not enough format args (blacklist %s?)", posString(call), nodeString(call.Fun))
+							t.Errorf("%s: not enough format args (ignore %s?)", posString(call), nodeString(call.Fun))
 							break // ignore this call
 						}
 						// assume last n arguments are to be formatted;
@@ -549,14 +549,14 @@ func formatReplace(in string, f func(i int, s string) string) string {
 	return string(append(buf, in[i0:]...))
 }
 
-// blacklistedPackages is the set of packages which can
+// ignoredPackages is the set of packages which can
 // be ignored.
-var blacklistedPackages = map[string]bool{}
+var ignoredPackages = map[string]bool{}
 
-// blacklistedFunctions is the set of functions which may have
+// ignoredFunctions is the set of functions which may have
 // format-like arguments but which don't do any formatting and
 // thus may be ignored.
-var blacklistedFunctions = map[string]bool{}
+var ignoredFunctions = map[string]bool{}
 
 func init() {
 	// verify that knownFormats entries are correctly formatted

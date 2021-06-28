@@ -66,6 +66,11 @@ type Value interface {
 // The spec requires at least 256 bits; typical implementations use 512 bits.
 const prec = 512
 
+// TODO(gri) Consider storing "error" information in an unknownVal so clients
+//           can provide better error messages. For instance, if a number is
+//           too large (incl. infinity), that could be recorded in unknownVal.
+//           See also #20583 and #42695 for use cases.
+
 type (
 	unknownVal struct{}
 	boolVal    bool
@@ -297,10 +302,16 @@ func makeFloat(x *big.Float) Value {
 	if x.Sign() == 0 {
 		return floatVal0
 	}
+	if x.IsInf() {
+		return unknownVal{}
+	}
 	return floatVal{x}
 }
 
 func makeComplex(re, im Value) Value {
+	if re.Kind() == Unknown || im.Kind() == Unknown {
+		return unknownVal{}
+	}
 	return complexVal{re, im}
 }
 
@@ -359,16 +370,13 @@ func MakeUint64(x uint64) Value {
 }
 
 // MakeFloat64 returns the Float value for x.
+// If x is -0.0, the result is 0.0.
 // If x is not finite, the result is an Unknown.
 func MakeFloat64(x float64) Value {
 	if math.IsInf(x, 0) || math.IsNaN(x) {
 		return unknownVal{}
 	}
-	// convert -0 to 0
-	if x == 0 {
-		return int64Val(0)
-	}
-	return ratVal{newRat().SetFloat64(x)}
+	return ratVal{newRat().SetFloat64(x + 0)} // convert -0 to 0
 }
 
 // MakeFromLiteral returns the corresponding integer, floating-point,
@@ -381,17 +389,8 @@ func MakeFromLiteral(lit string, tok token.Token, zero uint) Value {
 		panic("MakeFromLiteral called with non-zero last argument")
 	}
 
-	// TODO(gri) Remove stripSep and, for token.INT, 0o-octal handling
-	//           below once strconv and math/big can handle separators
-	//           and 0o-octals.
-
 	switch tok {
 	case token.INT:
-		// TODO(gri) remove 0o-special case once strconv and math/big can handle 0o-octals
-		lit = stripSep(lit)
-		if len(lit) >= 2 && lit[0] == '0' && (lit[1] == 'o' || lit[1] == 'O') {
-			lit = "0" + lit[2:]
-		}
 		if x, err := strconv.ParseInt(lit, 0, 64); err == nil {
 			return int64Val(x)
 		}
@@ -400,13 +399,11 @@ func MakeFromLiteral(lit string, tok token.Token, zero uint) Value {
 		}
 
 	case token.FLOAT:
-		lit = stripSep(lit)
 		if x := makeFloatFromLiteral(lit); x != nil {
 			return x
 		}
 
 	case token.IMAG:
-		lit = stripSep(lit)
 		if n := len(lit); n > 0 && lit[n-1] == 'i' {
 			if im := makeFloatFromLiteral(lit[:n-1]); im != nil {
 				return makeComplex(int64Val(0), im)
@@ -430,26 +427,6 @@ func MakeFromLiteral(lit string, tok token.Token, zero uint) Value {
 	}
 
 	return unknownVal{}
-}
-
-func stripSep(s string) string {
-	// avoid making a copy if there are no separators (common case)
-	i := 0
-	for i < len(s) && s[i] != '_' {
-		i++
-	}
-	if i == len(s) {
-		return s
-	}
-
-	// make a copy of s without separators
-	var buf []byte
-	for i := 0; i < len(s); i++ {
-		if c := s[i]; c != '_' {
-			buf = append(buf, c)
-		}
-	}
-	return string(buf)
 }
 
 // ----------------------------------------------------------------------------
@@ -614,11 +591,11 @@ func Make(x interface{}) Value {
 	case int64:
 		return int64Val(x)
 	case *big.Int:
-		return intVal{x}
+		return makeInt(x)
 	case *big.Rat:
-		return ratVal{x}
+		return makeRat(x)
 	case *big.Float:
-		return floatVal{x}
+		return makeFloat(x)
 	default:
 		return unknownVal{}
 	}

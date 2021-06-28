@@ -262,8 +262,8 @@ func bitcompl32(a, b uint32) (n uint32) {
 	return n
 }
 
-// check direct operation on memory with constant source
-func bitOpOnMem(a []uint32) {
+// check direct operation on memory with constant and shifted constant sources
+func bitOpOnMem(a []uint32, b, c, d uint32) {
 	// amd64:`ANDL\s[$]200,\s\([A-Z]+\)`
 	a[0] &= 200
 	// amd64:`ORL\s[$]220,\s4\([A-Z]+\)`
@@ -276,6 +276,17 @@ func bitOpOnMem(a []uint32) {
 	a[4] |= 0x4000
 	// amd64:`BTCL\s[$]13,\s20\([A-Z]+\)`,-`XORL`
 	a[5] ^= 0x2000
+	// amd64:`BTRL\s[A-Z]+,\s24\([A-Z]+\)`
+	a[6] &^= 1 << (b & 31)
+	// amd64:`BTSL\s[A-Z]+,\s28\([A-Z]+\)`
+	a[7] |= 1 << (c & 31)
+	// amd64:`BTCL\s[A-Z]+,\s32\([A-Z]+\)`
+	a[8] ^= 1 << (d & 31)
+}
+
+func bitcheckMostNegative(b uint8) bool {
+	// amd64:"TESTB"
+	return b&0x80 == 0x80
 }
 
 // Check AND masking on arm64 (Issue #19857)
@@ -305,9 +316,18 @@ func op_bic(x, y uint32) uint32 {
 	return x &^ y
 }
 
-func op_eon(x, y uint32) uint32 {
+func op_eon(x, y, z uint32, a []uint32, n, m uint64) uint64 {
+	// arm64:`EON\t`,-`EOR`,-`MVN`
+	a[0] = x ^ (y ^ 0xffffffff)
+
+	// arm64:`EON\t`,-`EOR`,-`MVN`
+	a[1] = ^(y ^ z)
+
 	// arm64:`EON\t`,-`XOR`
-	return x ^ ^y
+	a[2] = x ^ ^z
+
+	// arm64:`EON\t`,-`EOR`,-`MVN`
+	return n ^ (m ^ 0xffffffffffffffff)
 }
 
 func op_orn(x, y uint32) uint32 {
@@ -325,4 +345,16 @@ func bitSetTest(x int) bool {
 	// amd64:"ANDQ\t[$]9, AX"
 	// amd64:"CMPQ\tAX, [$]9"
 	return x&9 == 9
+}
+
+// mask contiguous one bits
+func cont1Mask64U(x uint64) uint64 {
+	// s390x:"RISBGZ\t[$]16, [$]47, [$]0,"
+	return x & 0x0000ffffffff0000
+}
+
+// mask contiguous zero bits
+func cont0Mask64U(x uint64) uint64 {
+	// s390x:"RISBGZ\t[$]48, [$]15, [$]0,"
+	return x & 0xffff00000000ffff
 }

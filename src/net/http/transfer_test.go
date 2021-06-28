@@ -10,7 +10,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"reflect"
 	"strings"
@@ -81,11 +80,11 @@ func TestDetectInMemoryReaders(t *testing.T) {
 		{bytes.NewBuffer(nil), true},
 		{strings.NewReader(""), true},
 
-		{ioutil.NopCloser(pr), false},
+		{io.NopCloser(pr), false},
 
-		{ioutil.NopCloser(bytes.NewReader(nil)), true},
-		{ioutil.NopCloser(bytes.NewBuffer(nil)), true},
-		{ioutil.NopCloser(strings.NewReader("")), true},
+		{io.NopCloser(bytes.NewReader(nil)), true},
+		{io.NopCloser(bytes.NewBuffer(nil)), true},
+		{io.NopCloser(strings.NewReader("")), true},
 	}
 	for i, tt := range tests {
 		got := isKnownInMemoryReader(tt.r)
@@ -104,12 +103,12 @@ var _ io.ReaderFrom = (*mockTransferWriter)(nil)
 
 func (w *mockTransferWriter) ReadFrom(r io.Reader) (int64, error) {
 	w.CalledReader = r
-	return io.Copy(ioutil.Discard, r)
+	return io.Copy(io.Discard, r)
 }
 
 func (w *mockTransferWriter) Write(p []byte) (int, error) {
 	w.WriteCalled = true
-	return ioutil.Discard.Write(p)
+	return io.Discard.Write(p)
 }
 
 func TestTransferWriterWriteBodyReaderTypes(t *testing.T) {
@@ -118,7 +117,7 @@ func TestTransferWriterWriteBodyReaderTypes(t *testing.T) {
 
 	nBytes := int64(1 << 10)
 	newFileFunc := func() (r io.Reader, done func(), err error) {
-		f, err := ioutil.TempFile("", "net-http-newfilefunc")
+		f, err := os.CreateTemp("", "net-http-newfilefunc")
 		if err != nil {
 			return nil, nil, err
 		}
@@ -166,7 +165,7 @@ func TestTransferWriterWriteBodyReaderTypes(t *testing.T) {
 			method: "PUT",
 			bodyFunc: func() (io.Reader, func(), error) {
 				r, cleanup, err := newFileFunc()
-				return ioutil.NopCloser(r), cleanup, err
+				return io.NopCloser(r), cleanup, err
 			},
 			contentLength:  nBytes,
 			limitedReader:  true,
@@ -206,7 +205,7 @@ func TestTransferWriterWriteBodyReaderTypes(t *testing.T) {
 			method: "PUT",
 			bodyFunc: func() (io.Reader, func(), error) {
 				r, cleanup, err := newBufferFunc()
-				return ioutil.NopCloser(r), cleanup, err
+				return io.NopCloser(r), cleanup, err
 			},
 			contentLength:  nBytes,
 			limitedReader:  true,
@@ -279,7 +278,7 @@ func TestTransferWriterWriteBodyReaderTypes(t *testing.T) {
 	}
 }
 
-func TestFixTransferEncoding(t *testing.T) {
+func TestParseTransferEncoding(t *testing.T) {
 	tests := []struct {
 		hdr     Header
 		wantErr error
@@ -290,7 +289,23 @@ func TestFixTransferEncoding(t *testing.T) {
 		},
 		{
 			hdr:     Header{"Transfer-Encoding": {"chunked, chunked", "identity", "chunked"}},
-			wantErr: &badStringError{"too many transfer encodings", "chunked,chunked"},
+			wantErr: &unsupportedTEError{`too many transfer encodings: ["chunked, chunked" "identity" "chunked"]`},
+		},
+		{
+			hdr:     Header{"Transfer-Encoding": {""}},
+			wantErr: &unsupportedTEError{`unsupported transfer encoding: ""`},
+		},
+		{
+			hdr:     Header{"Transfer-Encoding": {"chunked, identity"}},
+			wantErr: &unsupportedTEError{`unsupported transfer encoding: "chunked, identity"`},
+		},
+		{
+			hdr:     Header{"Transfer-Encoding": {"chunked", "identity"}},
+			wantErr: &unsupportedTEError{`too many transfer encodings: ["chunked" "identity"]`},
+		},
+		{
+			hdr:     Header{"Transfer-Encoding": {"\x0bchunked"}},
+			wantErr: &unsupportedTEError{`unsupported transfer encoding: "\vchunked"`},
 		},
 		{
 			hdr:     Header{"Transfer-Encoding": {"chunked"}},
@@ -304,9 +319,45 @@ func TestFixTransferEncoding(t *testing.T) {
 			ProtoMajor: 1,
 			ProtoMinor: 1,
 		}
-		gotErr := tr.fixTransferEncoding()
+		gotErr := tr.parseTransferEncoding()
 		if !reflect.DeepEqual(gotErr, tt.wantErr) {
 			t.Errorf("%d.\ngot error:\n%v\nwant error:\n%v\n\n", i, gotErr, tt.wantErr)
+		}
+	}
+}
+
+// issue 39017 - disallow Content-Length values such as "+3"
+func TestParseContentLength(t *testing.T) {
+	tests := []struct {
+		cl      string
+		wantErr error
+	}{
+		{
+			cl:      "3",
+			wantErr: nil,
+		},
+		{
+			cl:      "+3",
+			wantErr: badStringError("bad Content-Length", "+3"),
+		},
+		{
+			cl:      "-3",
+			wantErr: badStringError("bad Content-Length", "-3"),
+		},
+		{
+			// max int64, for safe conversion before returning
+			cl:      "9223372036854775807",
+			wantErr: nil,
+		},
+		{
+			cl:      "9223372036854775808",
+			wantErr: badStringError("bad Content-Length", "9223372036854775808"),
+		},
+	}
+
+	for _, tt := range tests {
+		if _, gotErr := parseContentLength(tt.cl); !reflect.DeepEqual(gotErr, tt.wantErr) {
+			t.Errorf("%q:\n\tgot=%v\n\twant=%v", tt.cl, gotErr, tt.wantErr)
 		}
 	}
 }

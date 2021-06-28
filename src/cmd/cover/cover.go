@@ -12,7 +12,6 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"sort"
@@ -293,13 +292,18 @@ func (f *File) Visit(node ast.Node) ast.Visitor {
 			ast.Walk(f, n.Assign)
 			return nil
 		}
+	case *ast.FuncDecl:
+		// Don't annotate functions with blank names - they cannot be executed.
+		if n.Name.Name == "_" {
+			return nil
+		}
 	}
 	return f
 }
 
 func annotate(name string) {
 	fset := token.NewFileSet()
-	content, err := ioutil.ReadFile(name)
+	content, err := os.ReadFile(name)
 	if err != nil {
 		log.Fatalf("cover: %s: %s", name, err)
 	}

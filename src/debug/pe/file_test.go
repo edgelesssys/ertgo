@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"debug/dwarf"
 	"internal/testenv"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -354,7 +353,7 @@ func testDWARF(t *testing.T, linktype int) {
 	}
 	testenv.MustHaveGoRun(t)
 
-	tmpdir, err := ioutil.TempDir("", "TestDWARF")
+	tmpdir, err := os.MkdirTemp("", "TestDWARF")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +450,7 @@ func testDWARF(t *testing.T, linktype int) {
 				}
 				offset := uintptr(addr) - imageBase
 				if offset != uintptr(wantoffset) {
-					t.Fatal("Runtime offset (0x%x) did "+
+					t.Fatalf("Runtime offset (0x%x) did "+
 						"not match dwarf offset "+
 						"(0x%x)", wantoffset, offset)
 				}
@@ -473,7 +472,7 @@ func TestBSSHasZeros(t *testing.T) {
 		t.Skip("skipping test: gcc is missing")
 	}
 
-	tmpdir, err := ioutil.TempDir("", "TestBSSHasZeros")
+	tmpdir, err := os.MkdirTemp("", "TestBSSHasZeros")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +491,7 @@ main(void)
 	return 0;
 }
 `
-	err = ioutil.WriteFile(srcpath, []byte(src), 0644)
+	err = os.WriteFile(srcpath, []byte(src), 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,14 +596,14 @@ func TestBuildingWindowsGUI(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("skipping windows only test")
 	}
-	tmpdir, err := ioutil.TempDir("", "TestBuildingWindowsGUI")
+	tmpdir, err := os.MkdirTemp("", "TestBuildingWindowsGUI")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tmpdir)
 
 	src := filepath.Join(tmpdir, "a.go")
-	err = ioutil.WriteFile(src, []byte(`package main; func main() {}`), 0644)
+	err = os.WriteFile(src, []byte(`package main; func main() {}`), 0644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,16 +620,14 @@ func TestBuildingWindowsGUI(t *testing.T) {
 	}
 	defer f.Close()
 
-	const _IMAGE_SUBSYSTEM_WINDOWS_GUI = 2
-
 	switch oh := f.OptionalHeader.(type) {
 	case *OptionalHeader32:
-		if oh.Subsystem != _IMAGE_SUBSYSTEM_WINDOWS_GUI {
-			t.Errorf("unexpected Subsystem value: have %d, but want %d", oh.Subsystem, _IMAGE_SUBSYSTEM_WINDOWS_GUI)
+		if oh.Subsystem != IMAGE_SUBSYSTEM_WINDOWS_GUI {
+			t.Errorf("unexpected Subsystem value: have %d, but want %d", oh.Subsystem, IMAGE_SUBSYSTEM_WINDOWS_GUI)
 		}
 	case *OptionalHeader64:
-		if oh.Subsystem != _IMAGE_SUBSYSTEM_WINDOWS_GUI {
-			t.Errorf("unexpected Subsystem value: have %d, but want %d", oh.Subsystem, _IMAGE_SUBSYSTEM_WINDOWS_GUI)
+		if oh.Subsystem != IMAGE_SUBSYSTEM_WINDOWS_GUI {
+			t.Errorf("unexpected Subsystem value: have %d, but want %d", oh.Subsystem, IMAGE_SUBSYSTEM_WINDOWS_GUI)
 		}
 	default:
 		t.Fatalf("unexpected OptionalHeader type: have %T, but want *pe.OptionalHeader32 or *pe.OptionalHeader64", oh)
@@ -686,7 +683,7 @@ func TestInvalidOptionalHeaderMagic(t *testing.T) {
 func TestImportedSymbolsNoPanicMissingOptionalHeader(t *testing.T) {
 	// https://golang.org/issue/30250
 	// ImportedSymbols shouldn't panic if optional headers is missing
-	data, err := ioutil.ReadFile("testdata/gcc-amd64-mingw-obj")
+	data, err := os.ReadFile("testdata/gcc-amd64-mingw-obj")
 	if err != nil {
 		t.Fatal(err)
 	}

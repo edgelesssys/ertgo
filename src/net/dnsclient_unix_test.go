@@ -10,8 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"internal/poll"
-	"io/ioutil"
 	"os"
 	"path"
 	"reflect"
@@ -236,7 +234,7 @@ type resolvConfTest struct {
 }
 
 func newResolvConfTest() (*resolvConfTest, error) {
-	dir, err := ioutil.TempDir("", "go-resolvconftest")
+	dir, err := os.MkdirTemp("", "go-resolvconftest")
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +478,7 @@ func TestGoLookupIPWithResolverConfig(t *testing.T) {
 			break
 		default:
 			time.Sleep(10 * time.Millisecond)
-			return dnsmessage.Message{}, poll.ErrTimeout
+			return dnsmessage.Message{}, os.ErrDeadlineExceeded
 		}
 		r := dnsmessage.Message{
 			Header: dnsmessage.Header{
@@ -993,7 +991,7 @@ func TestRetryTimeout(t *testing.T) {
 		if s == "192.0.2.1:53" {
 			deadline0 = deadline
 			time.Sleep(10 * time.Millisecond)
-			return dnsmessage.Message{}, poll.ErrTimeout
+			return dnsmessage.Message{}, os.ErrDeadlineExceeded
 		}
 
 		if deadline.Equal(deadline0) {
@@ -1131,7 +1129,7 @@ func TestStrictErrorsLookupIP(t *testing.T) {
 	}
 	makeTimeout := func() error {
 		return &DNSError{
-			Err:       poll.ErrTimeout.Error(),
+			Err:       os.ErrDeadlineExceeded.Error(),
 			Name:      name,
 			Server:    server,
 			IsTimeout: true,
@@ -1247,7 +1245,7 @@ func TestStrictErrorsLookupIP(t *testing.T) {
 					Questions: q.Questions,
 				}, nil
 			case resolveTimeout:
-				return dnsmessage.Message{}, poll.ErrTimeout
+				return dnsmessage.Message{}, os.ErrDeadlineExceeded
 			default:
 				t.Fatal("Impossible resolveWhich")
 			}
@@ -1372,7 +1370,7 @@ func TestStrictErrorsLookupTXT(t *testing.T) {
 
 		switch q.Questions[0].Name.String() {
 		case searchX:
-			return dnsmessage.Message{}, poll.ErrTimeout
+			return dnsmessage.Message{}, os.ErrDeadlineExceeded
 		case searchY:
 			return mockTXTResponse(q), nil
 		default:
@@ -1387,7 +1385,7 @@ func TestStrictErrorsLookupTXT(t *testing.T) {
 		var wantRRs int
 		if strict {
 			wantErr = &DNSError{
-				Err:       poll.ErrTimeout.Error(),
+				Err:       os.ErrDeadlineExceeded.Error(),
 				Name:      name,
 				Server:    server,
 				IsTimeout: true,
@@ -1415,7 +1413,7 @@ func TestDNSGoroutineRace(t *testing.T) {
 
 	fake := fakeDNSServer{rh: func(n, s string, q dnsmessage.Message, t time.Time) (dnsmessage.Message, error) {
 		time.Sleep(10 * time.Microsecond)
-		return dnsmessage.Message{}, poll.ErrTimeout
+		return dnsmessage.Message{}, os.ErrDeadlineExceeded
 	}}
 	r := Resolver{PreferGo: true, Dial: fake.DialContext}
 
@@ -1798,5 +1796,163 @@ func TestPTRandNonPTR(t *testing.T) {
 	}
 	if want := []string{"golang.org."}; !reflect.DeepEqual(names, want) {
 		t.Errorf("names = %q; want %q", names, want)
+	}
+}
+
+func TestCVE202133195(t *testing.T) {
+	fake := fakeDNSServer{
+		rh: func(n, _ string, q dnsmessage.Message, _ time.Time) (dnsmessage.Message, error) {
+			r := dnsmessage.Message{
+				Header: dnsmessage.Header{
+					ID:                 q.Header.ID,
+					Response:           true,
+					RCode:              dnsmessage.RCodeSuccess,
+					RecursionAvailable: true,
+				},
+				Questions: q.Questions,
+			}
+			switch q.Questions[0].Type {
+			case dnsmessage.TypeCNAME:
+				r.Answers = []dnsmessage.Resource{}
+			case dnsmessage.TypeA: // CNAME lookup uses a A/AAAA as a proxy
+				r.Answers = append(r.Answers,
+					dnsmessage.Resource{
+						Header: dnsmessage.ResourceHeader{
+							Name:   dnsmessage.MustNewName("<html>.golang.org."),
+							Type:   dnsmessage.TypeA,
+							Class:  dnsmessage.ClassINET,
+							Length: 4,
+						},
+						Body: &dnsmessage.AResource{
+							A: TestAddr,
+						},
+					},
+				)
+			case dnsmessage.TypeSRV:
+				n := q.Questions[0].Name
+				if n.String() == "_hdr._tcp.golang.org." {
+					n = dnsmessage.MustNewName("<html>.golang.org.")
+				}
+				r.Answers = append(r.Answers,
+					dnsmessage.Resource{
+						Header: dnsmessage.ResourceHeader{
+							Name:   n,
+							Type:   dnsmessage.TypeSRV,
+							Class:  dnsmessage.ClassINET,
+							Length: 4,
+						},
+						Body: &dnsmessage.SRVResource{
+							Target: dnsmessage.MustNewName("<html>.golang.org."),
+						},
+					},
+				)
+			case dnsmessage.TypeMX:
+				r.Answers = append(r.Answers,
+					dnsmessage.Resource{
+						Header: dnsmessage.ResourceHeader{
+							Name:   dnsmessage.MustNewName("<html>.golang.org."),
+							Type:   dnsmessage.TypeMX,
+							Class:  dnsmessage.ClassINET,
+							Length: 4,
+						},
+						Body: &dnsmessage.MXResource{
+							MX: dnsmessage.MustNewName("<html>.golang.org."),
+						},
+					},
+				)
+			case dnsmessage.TypeNS:
+				r.Answers = append(r.Answers,
+					dnsmessage.Resource{
+						Header: dnsmessage.ResourceHeader{
+							Name:   dnsmessage.MustNewName("<html>.golang.org."),
+							Type:   dnsmessage.TypeNS,
+							Class:  dnsmessage.ClassINET,
+							Length: 4,
+						},
+						Body: &dnsmessage.NSResource{
+							NS: dnsmessage.MustNewName("<html>.golang.org."),
+						},
+					},
+				)
+			case dnsmessage.TypePTR:
+				r.Answers = append(r.Answers,
+					dnsmessage.Resource{
+						Header: dnsmessage.ResourceHeader{
+							Name:   dnsmessage.MustNewName("<html>.golang.org."),
+							Type:   dnsmessage.TypePTR,
+							Class:  dnsmessage.ClassINET,
+							Length: 4,
+						},
+						Body: &dnsmessage.PTRResource{
+							PTR: dnsmessage.MustNewName("<html>.golang.org."),
+						},
+					},
+				)
+			}
+			return r, nil
+		},
+	}
+
+	r := Resolver{PreferGo: true, Dial: fake.DialContext}
+	// Change the default resolver to match our manipulated resolver
+	originalDefault := DefaultResolver
+	DefaultResolver = &r
+	defer func() { DefaultResolver = originalDefault }()
+	// Redirect host file lookups.
+	defer func(orig string) { testHookHostsPath = orig }(testHookHostsPath)
+	testHookHostsPath = "testdata/hosts"
+
+	_, err := r.LookupCNAME(context.Background(), "golang.org")
+	if expected := "lookup golang.org: CNAME target is invalid"; err == nil || err.Error() != expected {
+		t.Errorf("Resolver.LookupCNAME returned unexpected error, got %q, want %q", err, expected)
+	}
+	_, err = LookupCNAME("golang.org")
+	if expected := "lookup golang.org: CNAME target is invalid"; err == nil || err.Error() != expected {
+		t.Errorf("LookupCNAME returned unexpected error, got %q, want %q", err, expected)
+	}
+
+	_, _, err = r.LookupSRV(context.Background(), "target", "tcp", "golang.org")
+	if expected := "lookup golang.org: SRV target is invalid"; err == nil || err.Error() != expected {
+		t.Errorf("Resolver.LookupSRV returned unexpected error, got %q, want %q", err, expected)
+	}
+	_, _, err = LookupSRV("target", "tcp", "golang.org")
+	if expected := "lookup golang.org: SRV target is invalid"; err == nil || err.Error() != expected {
+		t.Errorf("LookupSRV returned unexpected error, got %q, want %q", err, expected)
+	}
+
+	_, _, err = r.LookupSRV(context.Background(), "hdr", "tcp", "golang.org")
+	if expected := "lookup golang.org: SRV header name is invalid"; err == nil || err.Error() != expected {
+		t.Errorf("Resolver.LookupSRV returned unexpected error, got %q, want %q", err, expected)
+	}
+	_, _, err = LookupSRV("hdr", "tcp", "golang.org")
+	if expected := "lookup golang.org: SRV header name is invalid"; err == nil || err.Error() != expected {
+		t.Errorf("LookupSRV returned unexpected error, got %q, want %q", err, expected)
+	}
+
+	_, err = r.LookupMX(context.Background(), "golang.org")
+	if expected := "lookup golang.org: MX target is invalid"; err == nil || err.Error() != expected {
+		t.Errorf("Resolver.LookupMX returned unexpected error, got %q, want %q", err, expected)
+	}
+	_, err = LookupMX("golang.org")
+	if expected := "lookup golang.org: MX target is invalid"; err == nil || err.Error() != expected {
+		t.Errorf("LookupMX returned unexpected error, got %q, want %q", err, expected)
+	}
+
+	_, err = r.LookupNS(context.Background(), "golang.org")
+	if expected := "lookup golang.org: NS target is invalid"; err == nil || err.Error() != expected {
+		t.Errorf("Resolver.LookupNS returned unexpected error, got %q, want %q", err, expected)
+	}
+	_, err = LookupNS("golang.org")
+	if expected := "lookup golang.org: NS target is invalid"; err == nil || err.Error() != expected {
+		t.Errorf("LookupNS returned unexpected error, got %q, want %q", err, expected)
+	}
+
+	_, err = r.LookupAddr(context.Background(), "192.0.2.42")
+	if expected := "lookup 192.0.2.42: PTR target is invalid"; err == nil || err.Error() != expected {
+		t.Errorf("Resolver.LookupAddr returned unexpected error, got %q, want %q", err, expected)
+	}
+	_, err = LookupAddr("192.0.2.42")
+	if expected := "lookup 192.0.2.42: PTR target is invalid"; err == nil || err.Error() != expected {
+		t.Errorf("LookupAddr returned unexpected error, got %q, want %q", err, expected)
 	}
 }
