@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"sync"
@@ -25,10 +26,15 @@ import (
 // sends it to another server, proxying the response back to the
 // client.
 //
-// ReverseProxy automatically sets the client IP as the value of the
+// ReverseProxy by default sets the client IP as the value of the
 // X-Forwarded-For header.
+//
 // If an X-Forwarded-For header already exists, the client IP is
-// appended to the existing values.
+// appended to the existing values. As a special case, if the header
+// exists in the Request.Header map but has a nil value (such as when
+// set by the Director func), the X-Forwarded-For header is
+// not modified.
+//
 // To prevent IP spoofing, be sure to delete any pre-existing
 // X-Forwarded-For header coming from the client or
 // an untrusted proxy.
@@ -52,9 +58,9 @@ type ReverseProxy struct {
 	// A negative value means to flush immediately
 	// after each write to the client.
 	// The FlushInterval is ignored when ReverseProxy
-	// recognizes a response as a streaming response;
-	// for such responses, writes are flushed to the client
-	// immediately.
+	// recognizes a response as a streaming response, or
+	// if its ContentLength is -1; for such responses, writes
+	// are flushed to the client immediately.
 	FlushInterval time.Duration
 
 	// ErrorLog specifies an optional logger for errors
@@ -105,6 +111,27 @@ func singleJoiningSlash(a, b string) string {
 	return a + b
 }
 
+func joinURLPath(a, b *url.URL) (path, rawpath string) {
+	if a.RawPath == "" && b.RawPath == "" {
+		return singleJoiningSlash(a.Path, b.Path), ""
+	}
+	// Same as singleJoiningSlash, but uses EscapedPath to determine
+	// whether a slash should be added
+	apath := a.EscapedPath()
+	bpath := b.EscapedPath()
+
+	aslash := strings.HasSuffix(apath, "/")
+	bslash := strings.HasPrefix(bpath, "/")
+
+	switch {
+	case aslash && bslash:
+		return a.Path + b.Path[1:], apath + bpath[1:]
+	case !aslash && !bslash:
+		return a.Path + "/" + b.Path, apath + "/" + bpath
+	}
+	return a.Path + b.Path, apath + bpath
+}
+
 // NewSingleHostReverseProxy returns a new ReverseProxy that routes
 // URLs to the scheme, host, and base path provided in target. If the
 // target's path is "/base" and the incoming request was for "/dir",
@@ -117,7 +144,7 @@ func NewSingleHostReverseProxy(target *url.URL) *ReverseProxy {
 	director := func(req *http.Request) {
 		req.URL.Scheme = target.Scheme
 		req.URL.Host = target.Host
-		req.URL.Path = singleJoiningSlash(target.Path, req.URL.Path)
+		req.URL.Path, req.URL.RawPath = joinURLPath(target, req.URL)
 		if targetQuery == "" || req.URL.RawQuery == "" {
 			req.URL.RawQuery = targetQuery + req.URL.RawQuery
 		} else {
@@ -221,20 +248,16 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	// important is "Connection" because we want a persistent
 	// connection, regardless of what the client sent to us.
 	for _, h := range hopHeaders {
-		hv := outreq.Header.Get(h)
-		if hv == "" {
-			continue
-		}
-		if h == "Te" && hv == "trailers" {
-			// Issue 21096: tell backend applications that
-			// care about trailer support that we support
-			// trailers. (We do, but we don't go out of
-			// our way to advertise that unless the
-			// incoming client request thought it was
-			// worth mentioning)
-			continue
-		}
 		outreq.Header.Del(h)
+	}
+
+	// Issue 21096: tell backend applications that care about trailer support
+	// that we support trailers. (We do, but we don't go out of our way to
+	// advertise that unless the incoming client request thought it was worth
+	// mentioning.) Note that we look at req.Header, not outreq.Header, since
+	// the latter has passed through removeConnectionHeaders.
+	if httpguts.HeaderValuesContainsToken(req.Header["Te"], "trailers") {
+		outreq.Header.Set("Te", "trailers")
 	}
 
 	// After stripping all the hop-by-hop connection headers above, add back any
@@ -248,10 +271,14 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		// If we aren't the first proxy retain prior
 		// X-Forwarded-For information as a comma+space
 		// separated list and fold multiple headers into one.
-		if prior, ok := outreq.Header["X-Forwarded-For"]; ok {
+		prior, ok := outreq.Header["X-Forwarded-For"]
+		omit := ok && prior == nil // Issue 38079: nil now means don't populate the header
+		if len(prior) > 0 {
 			clientIP = strings.Join(prior, ", ") + ", " + clientIP
 		}
-		outreq.Header.Set("X-Forwarded-For", clientIP)
+		if !omit {
+			outreq.Header.Set("X-Forwarded-For", clientIP)
+		}
 	}
 
 	res, err := transport.RoundTrip(outreq)
@@ -294,7 +321,7 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	rw.WriteHeader(res.StatusCode)
 
-	err = p.copyResponse(rw, res.Body, p.flushInterval(req, res))
+	err = p.copyResponse(rw, res.Body, p.flushInterval(res))
 	if err != nil {
 		defer res.Body.Close()
 		// Since we're streaming the response, if we run into an error all we can do
@@ -357,7 +384,7 @@ func shouldPanicOnCopyError(req *http.Request) bool {
 func removeConnectionHeaders(h http.Header) {
 	for _, f := range h["Connection"] {
 		for _, sf := range strings.Split(f, ",") {
-			if sf = strings.TrimSpace(sf); sf != "" {
+			if sf = textproto.TrimString(sf); sf != "" {
 				h.Del(sf)
 			}
 		}
@@ -366,7 +393,7 @@ func removeConnectionHeaders(h http.Header) {
 
 // flushInterval returns the p.FlushInterval value, conditionally
 // overriding its value for a specific request/response.
-func (p *ReverseProxy) flushInterval(req *http.Request, res *http.Response) time.Duration {
+func (p *ReverseProxy) flushInterval(res *http.Response) time.Duration {
 	resCT := res.Header.Get("Content-Type")
 
 	// For Server-Sent Events responses, flush immediately.
@@ -375,7 +402,11 @@ func (p *ReverseProxy) flushInterval(req *http.Request, res *http.Response) time
 		return -1 // negative means immediately
 	}
 
-	// TODO: more specific cases? e.g. res.ContentLength == -1?
+	// We might have the case of streaming for which Content-Length might be unset.
+	if res.ContentLength == -1 {
+		return -1
+	}
+
 	return p.FlushInterval
 }
 
@@ -514,8 +545,6 @@ func (p *ReverseProxy) handleUpgradeResponse(rw http.ResponseWriter, req *http.R
 		return
 	}
 
-	copyHeader(res.Header, rw.Header())
-
 	hj, ok := rw.(http.Hijacker)
 	if !ok {
 		p.getErrorHandler()(rw, req, fmt.Errorf("can't switch protocols using non-Hijacker ResponseWriter type %T", rw))
@@ -526,13 +555,30 @@ func (p *ReverseProxy) handleUpgradeResponse(rw http.ResponseWriter, req *http.R
 		p.getErrorHandler()(rw, req, fmt.Errorf("internal error: 101 switching protocols response with non-writable body"))
 		return
 	}
-	defer backConn.Close()
+
+	backConnCloseCh := make(chan bool)
+	go func() {
+		// Ensure that the cancelation of a request closes the backend.
+		// See issue https://golang.org/issue/35559.
+		select {
+		case <-req.Context().Done():
+		case <-backConnCloseCh:
+		}
+		backConn.Close()
+	}()
+
+	defer close(backConnCloseCh)
+
 	conn, brw, err := hj.Hijack()
 	if err != nil {
 		p.getErrorHandler()(rw, req, fmt.Errorf("Hijack failed on protocol switch: %v", err))
 		return
 	}
 	defer conn.Close()
+
+	copyHeader(rw.Header(), res.Header)
+
+	res.Header = rw.Header()
 	res.Body = nil // so res.Write only writes the headers; we have res.Body in backConn above
 	if err := res.Write(brw); err != nil {
 		p.getErrorHandler()(rw, req, fmt.Errorf("response write: %v", err))

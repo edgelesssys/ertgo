@@ -106,6 +106,91 @@ func TestRepeat(t *testing.T) {
 	}
 }
 
+func TestSeedFromSum64(t *testing.T) {
+	h1 := new(Hash)
+	h1.WriteString("foo")
+	x := h1.Sum64() // seed generated here
+	h2 := new(Hash)
+	h2.SetSeed(h1.Seed())
+	h2.WriteString("foo")
+	y := h2.Sum64()
+	if x != y {
+		t.Errorf("hashes don't match: want %x, got %x", x, y)
+	}
+}
+
+func TestSeedFromSeed(t *testing.T) {
+	h1 := new(Hash)
+	h1.WriteString("foo")
+	_ = h1.Seed() // seed generated here
+	x := h1.Sum64()
+	h2 := new(Hash)
+	h2.SetSeed(h1.Seed())
+	h2.WriteString("foo")
+	y := h2.Sum64()
+	if x != y {
+		t.Errorf("hashes don't match: want %x, got %x", x, y)
+	}
+}
+
+func TestSeedFromFlush(t *testing.T) {
+	b := make([]byte, 65)
+	h1 := new(Hash)
+	h1.Write(b) // seed generated here
+	x := h1.Sum64()
+	h2 := new(Hash)
+	h2.SetSeed(h1.Seed())
+	h2.Write(b)
+	y := h2.Sum64()
+	if x != y {
+		t.Errorf("hashes don't match: want %x, got %x", x, y)
+	}
+}
+
+func TestSeedFromReset(t *testing.T) {
+	h1 := new(Hash)
+	h1.WriteString("foo")
+	h1.Reset() // seed generated here
+	h1.WriteString("foo")
+	x := h1.Sum64()
+	h2 := new(Hash)
+	h2.SetSeed(h1.Seed())
+	h2.WriteString("foo")
+	y := h2.Sum64()
+	if x != y {
+		t.Errorf("hashes don't match: want %x, got %x", x, y)
+	}
+}
+
 // Make sure a Hash implements the hash.Hash and hash.Hash64 interfaces.
 var _ hash.Hash = &Hash{}
 var _ hash.Hash64 = &Hash{}
+
+func benchmarkSize(b *testing.B, size int) {
+	h := &Hash{}
+	buf := make([]byte, size)
+	b.SetBytes(int64(size))
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		h.Reset()
+		h.Write(buf)
+		h.Sum64()
+	}
+}
+
+func BenchmarkHash8Bytes(b *testing.B) {
+	benchmarkSize(b, 8)
+}
+
+func BenchmarkHash320Bytes(b *testing.B) {
+	benchmarkSize(b, 320)
+}
+
+func BenchmarkHash1K(b *testing.B) {
+	benchmarkSize(b, 1024)
+}
+
+func BenchmarkHash8K(b *testing.B) {
+	benchmarkSize(b, 8192)
+}

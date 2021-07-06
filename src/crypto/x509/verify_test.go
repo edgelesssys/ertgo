@@ -285,18 +285,6 @@ var verifyTests = []verifyTest{
 		errorCallback: expectHostnameError("certificate is valid for"),
 	},
 	{
-		// The issuer name in the leaf doesn't exactly match the
-		// subject name in the root. Go does not perform
-		// canonicalization and so should reject this. See issue 14955.
-		name:        "IssuerSubjectMismatch",
-		leaf:        issuerSubjectMatchLeaf,
-		roots:       []string{issuerSubjectMatchRoot},
-		currentTime: 1475787715,
-		systemSkip:  true, // does not chain to a system root
-
-		errorCallback: expectSubjectIssuerMismatcthError,
-	},
-	{
 		// An X.509 v1 certificate should not be accepted as an
 		// intermediate.
 		name:          "X509v1Intermediate",
@@ -403,7 +391,7 @@ var verifyTests = []verifyTest{
 		systemSkip:  true, // does not chain to a system root
 		ignoreCN:    true,
 
-		errorCallback: expectHostnameError("Common Name is not a valid hostname"),
+		errorCallback: expectHostnameError("certificate is not valid for any names"),
 	},
 	{
 		name:        "ValidCN/ignoreCN",
@@ -414,7 +402,7 @@ var verifyTests = []verifyTest{
 		systemSkip:  true, // does not chain to a system root
 		ignoreCN:    true,
 
-		errorCallback: expectHostnameError("not valid for any names"),
+		errorCallback: expectHostnameError("certificate relies on legacy Common Name field"),
 	},
 	{
 		// A certificate with an AKID should still chain to a parent without SKID.
@@ -428,6 +416,20 @@ var verifyTests = []verifyTest{
 
 		expectedChains: [][]string{
 			{"Acme LLC", "Acme Co"},
+		},
+	},
+	{
+		// When there are two parents, one with a incorrect subject but matching SKID
+		// and one with a correct subject but missing SKID, the latter should be
+		// considered as a possible parent.
+		leaf:        leafMatchingAKIDMatchingIssuer,
+		roots:       []string{rootMatchingSKIDMismatchingSubject, rootMismatchingSKIDMatchingSubject},
+		currentTime: 1550000000,
+		dnsName:     "example",
+		systemSkip:  true,
+
+		expectedChains: [][]string{
+			{"Leaf", "Root B"},
 		},
 	},
 }
@@ -471,12 +473,6 @@ func expectHashError(t *testing.T, err error) {
 	}
 	if expected := "algorithm unimplemented"; !strings.Contains(err.Error(), expected) {
 		t.Fatalf("error resulting from invalid hash didn't contain '%s', rather it was: %v", expected, err)
-	}
-}
-
-func expectSubjectIssuerMismatcthError(t *testing.T, err error) {
-	if inval, ok := err.(CertificateInvalidError); !ok || inval.Reason != NameMismatch {
-		t.Fatalf("error was not a NameMismatch: %v", err)
 	}
 }
 
@@ -554,34 +550,55 @@ func testVerify(t *testing.T, test verifyTest, useSystemRoots bool) {
 		}
 	}
 
-	if len(chains) != len(test.expectedChains) {
-		t.Errorf("wanted %d chains, got %d", len(test.expectedChains), len(chains))
+	doesMatch := func(expectedChain []string, chain []*Certificate) bool {
+		if len(chain) != len(expectedChain) {
+			return false
+		}
+
+		for k, cert := range chain {
+			if !strings.Contains(nameToKey(&cert.Subject), expectedChain[k]) {
+				return false
+			}
+		}
+		return true
 	}
 
-	// We check that each returned chain matches a chain from
-	// expectedChains but an entry in expectedChains can't match
-	// two chains.
-	seenChains := make([]bool, len(chains))
-NextOutputChain:
-	for _, chain := range chains {
-	TryNextExpected:
-		for j, expectedChain := range test.expectedChains {
-			if seenChains[j] {
-				continue
+	// Every expected chain should match 1 returned chain
+	for _, expectedChain := range test.expectedChains {
+		nChainMatched := 0
+		for _, chain := range chains {
+			if doesMatch(expectedChain, chain) {
+				nChainMatched++
 			}
-			if len(chain) != len(expectedChain) {
-				continue
-			}
-			for k, cert := range chain {
-				if !strings.Contains(nameToKey(&cert.Subject), expectedChain[k]) {
-					continue TryNextExpected
+		}
+
+		if nChainMatched != 1 {
+			t.Errorf("Got %v matches instead of %v for expected chain %v", nChainMatched, 1, expectedChain)
+			for _, chain := range chains {
+				if doesMatch(expectedChain, chain) {
+					t.Errorf("\t matched %v", chainToDebugString(chain))
 				}
 			}
-			// we matched
-			seenChains[j] = true
-			continue NextOutputChain
 		}
-		t.Errorf("no expected chain matched %s", chainToDebugString(chain))
+	}
+
+	// Every returned chain should match 1 expected chain (or <2 if testing against the system)
+	for _, chain := range chains {
+		nMatched := 0
+		for _, expectedChain := range test.expectedChains {
+			if doesMatch(expectedChain, chain) {
+				nMatched++
+			}
+		}
+		// Allow additional unknown chains if systemLax is set
+		if nMatched == 0 && test.systemLax == false || nMatched > 1 {
+			t.Errorf("Got %v matches for chain %v", nMatched, chainToDebugString(chain))
+			for _, expectedChain := range test.expectedChains {
+				if doesMatch(expectedChain, chain) {
+					t.Errorf("\t matched %v", expectedChain)
+				}
+			}
+		}
 	}
 }
 
@@ -1615,6 +1632,36 @@ ssWvTAveakIwEgYDVR0RBAswCYIHZXhhbXBsZTAKBggqhkjOPQQDAgNHADBEAiBk
 ZZMqeJS7JldLx91sPUArY5A=
 -----END CERTIFICATE-----`
 
+const rootMatchingSKIDMismatchingSubject = `-----BEGIN CERTIFICATE-----
+MIIBQjCB6aADAgECAgEAMAoGCCqGSM49BAMCMBExDzANBgNVBAMTBlJvb3QgQTAe
+Fw0wOTExMTAyMzAwMDBaFw0xOTExMDgyMzAwMDBaMBExDzANBgNVBAMTBlJvb3Qg
+QTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABPK4p1uXq2aAeDtKDHIokg2rTcPM
+2gq3N9Y96wiW6/7puBK1+INEW//cO9x6FpzkcsHw/TriAqy4sck/iDAvf9WjMjAw
+MA8GA1UdJQQIMAYGBFUdJQAwDwYDVR0TAQH/BAUwAwEB/zAMBgNVHQ4EBQQDAQID
+MAoGCCqGSM49BAMCA0gAMEUCIQDgtAp7iVHxMnKxZPaLQPC+Tv2r7+DJc88k2SKH
+MPs/wQIgFjjNvBoQEl7vSHTcRGCCcFMdlN4l0Dqc9YwGa9fyrQs=
+-----END CERTIFICATE-----`
+
+const rootMismatchingSKIDMatchingSubject = `-----BEGIN CERTIFICATE-----
+MIIBNDCB26ADAgECAgEAMAoGCCqGSM49BAMCMBExDzANBgNVBAMTBlJvb3QgQjAe
+Fw0wOTExMTAyMzAwMDBaFw0xOTExMDgyMzAwMDBaMBExDzANBgNVBAMTBlJvb3Qg
+QjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABI1YRFcIlkWzm9BdEVrIsEQJ2dT6
+qiW8/WV9GoIhmDtX9SEDHospc0Cgm+TeD2QYW2iMrS5mvNe4GSw0Jezg/bOjJDAi
+MA8GA1UdJQQIMAYGBFUdJQAwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNI
+ADBFAiEAukWOiuellx8bugRiwCS5XQ6IOJ1SZcjuZxj76WojwxkCIHqa71qNw8FM
+DtA5yoL9M2pDFF6ovFWnaCe+KlzSwAW/
+-----END CERTIFICATE-----`
+
+const leafMatchingAKIDMatchingIssuer = `-----BEGIN CERTIFICATE-----
+MIIBNTCB26ADAgECAgEAMAoGCCqGSM49BAMCMBExDzANBgNVBAMTBlJvb3QgQjAe
+Fw0wOTExMTAyMzAwMDBaFw0xOTExMDgyMzAwMDBaMA8xDTALBgNVBAMTBExlYWYw
+WTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASNWERXCJZFs5vQXRFayLBECdnU+qol
+vP1lfRqCIZg7V/UhAx6LKXNAoJvk3g9kGFtojK0uZrzXuBksNCXs4P2zoyYwJDAO
+BgNVHSMEBzAFgAMBAgMwEgYDVR0RBAswCYIHZXhhbXBsZTAKBggqhkjOPQQDAgNJ
+ADBGAiEAnV9XV7a4h0nfJB8pWv+pBUXRlRFA2uZz3mXEpee8NYACIQCWa+wL70GL
+ePBQCV1F9sE2q4ZrnsT9TZoNrSe/bMDjzA==
+-----END CERTIFICATE-----`
+
 var unknownAuthorityErrorTests = []struct {
 	cert     string
 	expected string
@@ -1807,26 +1854,31 @@ CCqGSM49BAMCA0gAMEUCIQClA3d4tdrDu9Eb5ZBpgyC+fU1xTZB0dKQHz6M5fPZA
 
 func TestValidHostname(t *testing.T) {
 	tests := []struct {
-		host string
-		want bool
+		host                     string
+		validInput, validPattern bool
 	}{
-		{"example.com", true},
-		{"eXample123-.com", true},
-		{"-eXample123-.com", false},
-		{"", false},
-		{".", false},
-		{"example..com", false},
-		{".example.com", false},
-		{"*.example.com", true},
-		{"*foo.example.com", false},
-		{"foo.*.example.com", false},
-		{"exa_mple.com", true},
-		{"foo,bar", false},
-		{"project-dev:us-central1:main", true},
+		{host: "example.com", validInput: true, validPattern: true},
+		{host: "eXample123-.com", validInput: true, validPattern: true},
+		{host: "-eXample123-.com"},
+		{host: ""},
+		{host: "."},
+		{host: "example..com"},
+		{host: ".example.com"},
+		{host: "example.com.", validInput: true},
+		{host: "*.example.com."},
+		{host: "*.example.com", validPattern: true},
+		{host: "*foo.example.com"},
+		{host: "foo.*.example.com"},
+		{host: "exa_mple.com", validInput: true, validPattern: true},
+		{host: "foo,bar"},
+		{host: "project-dev:us-central1:main"},
 	}
 	for _, tt := range tests {
-		if got := validHostname(tt.host); got != tt.want {
-			t.Errorf("validHostname(%q) = %v, want %v", tt.host, got, tt.want)
+		if got := validHostnamePattern(tt.host); got != tt.validPattern {
+			t.Errorf("validHostnamePattern(%q) = %v, want %v", tt.host, got, tt.validPattern)
+		}
+		if got := validHostnameInput(tt.host); got != tt.validInput {
+			t.Errorf("validHostnameInput(%q) = %v, want %v", tt.host, got, tt.validInput)
 		}
 	}
 }
@@ -1972,5 +2024,13 @@ func TestSystemRootsError(t *testing.T) {
 	_, err = leaf.Verify(opts)
 	if _, ok := err.(SystemRootsError); !ok {
 		t.Errorf("error was not SystemRootsError: %v", err)
+	}
+}
+
+func TestSystemRootsErrorUnwrap(t *testing.T) {
+	var err1 = errors.New("err1")
+	err := SystemRootsError{Err: err1}
+	if !errors.Is(err, err1) {
+		t.Error("errors.Is failed, wanted success")
 	}
 }

@@ -6,7 +6,10 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"runtime/internal/atomic"
+	"unsafe"
+)
 
 func epollcreate(size int32) int32
 func epollcreate1(flags int32) int32
@@ -22,6 +25,8 @@ var (
 	epfd int32 = -1 // epoll descriptor
 
 	netpollBreakRd, netpollBreakWr uintptr // for netpollBreak
+
+	netpollWakeSig uint32 // used to avoid duplicate calls of netpollBreak
 )
 
 func netpollinit() {
@@ -34,25 +39,25 @@ func netpollinit() {
 		}
 		closeonexec(epfd)
 	}
-	// EDG: We don't have pipe. We may implement it with eventfd.
-	// However, `go test -run NetpollBreak` succeeds without it.
-	/*r, w, errno := nonblockingPipe()
-	if errno != 0 {
-		println("runtime: pipe failed with", -errno)
-		throw("runtime: pipe failed")
+	// EDG: We don't have pipe. We use eventfd instead.
+	fd := eventfd(0, _O_NONBLOCK|_O_CLOEXEC)
+	if fd < 0 {
+		println("runtime: eventfd failed with", -fd)
+		throw("runtime: eventfd failed")
 	}
 	ev := epollevent{
 		events: _EPOLLIN,
 	}
 	*(**uintptr)(unsafe.Pointer(&ev.data)) = &netpollBreakRd
-	errno = epollctl(epfd, _EPOLL_CTL_ADD, r, &ev)
+	errno := epollctl(epfd, _EPOLL_CTL_ADD, fd, &ev)
 	if errno != 0 {
 		println("runtime: epollctl failed with", -errno)
 		throw("runtime: epollctl failed")
 	}
-	netpollBreakRd = uintptr(r)
-	netpollBreakWr = uintptr(w)*/
+	netpollBreakRd = uintptr(fd)
+	netpollBreakWr = uintptr(fd)
 }
+func eventfd(count uint32, flags int32) int32
 
 func netpollIsPollDescriptor(fd uintptr) bool {
 	return fd == uintptr(epfd) || fd == netpollBreakRd || fd == netpollBreakWr
@@ -76,22 +81,25 @@ func netpollarm(pd *pollDesc, mode int) {
 
 // netpollBreak interrupts an epollwait.
 func netpollBreak() {
-	// EDG: see comment in netpollinit
-	/*for {
-		var b byte
-		n := write(netpollBreakWr, unsafe.Pointer(&b), 1)
-		if n == 1 {
-			break
+	if atomic.Cas(&netpollWakeSig, 0, 1) {
+		for {
+			// EDG: see comment in netpollinit
+			b := []byte{1, 0, 0, 0, 0, 0, 0, 0}
+			l := int32(len(b))
+			n := write(netpollBreakWr, unsafe.Pointer(&b[0]), l)
+			if n == l {
+				break
+			}
+			if n == -_EINTR {
+				continue
+			}
+			if n == -_EAGAIN {
+				return
+			}
+			println("runtime: netpollBreak write failed with", -n)
+			throw("runtime: netpollBreak write failed")
 		}
-		if n == -_EINTR {
-			continue
-		}
-		if n == -_EAGAIN {
-			return
-		}
-		println("runtime: netpollBreak write failed with", -n)
-		throw("runtime: netpollBreak write failed")
-	}*/
+	}
 }
 
 // netpoll checks for ready network connections.
@@ -150,6 +158,7 @@ retry:
 				// if blocking.
 				var tmp [16]byte
 				read(int32(netpollBreakRd), noescape(unsafe.Pointer(&tmp[0])), int32(len(tmp)))
+				atomic.Store(&netpollWakeSig, 0)
 			}
 			continue
 		}

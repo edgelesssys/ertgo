@@ -266,7 +266,7 @@ listed in the GOPATH environment variable.
 (See 'go help gopath-get' and 'go help gopath'.)
 
 When using modules, downloaded packages are stored in the module cache.
-(See 'go help module-get' and 'go help goproxy'.)
+See https://golang.org/ref/mod#module-cache.
 
 When using modules, an additional variant of the go-import meta tag is
 recognized and is preferred over those listing version control systems.
@@ -276,7 +276,8 @@ That variant uses "mod" as the vcs in the content value, as in:
 
 This tag means to fetch modules with paths beginning with example.org
 from the module proxy available at the URL https://code.org/moduleproxy.
-See 'go help goproxy' for details about the proxy protocol.
+See https://golang.org/ref/mod#goproxy-protocol for details about the
+proxy protocol.
 
 Import path checking
 
@@ -483,6 +484,10 @@ See 'go help env' for details.
 
 General-purpose environment variables:
 
+	GO111MODULE
+		Controls whether the go command runs in module-aware mode or GOPATH mode.
+		May be "off", "on", or "auto".
+		See https://golang.org/ref/mod#mod-commands.
 	GCCGO
 		The gccgo command to run for 'go build -compiler=gccgo'.
 	GOARCH
@@ -493,6 +498,8 @@ General-purpose environment variables:
 	GOCACHE
 		The directory where the go command will store cached
 		information for reuse in future builds.
+	GOMODCACHE
+		The directory where the go command will store downloaded modules.
 	GODEBUG
 		Enable various debugging facilities. See 'go doc runtime'
 		for details.
@@ -510,26 +517,33 @@ General-purpose environment variables:
 		Comma-separated list of glob patterns (in the syntax of Go's path.Match)
 		of module path prefixes that should always be fetched in an insecure
 		manner. Only applies to dependencies that are being fetched directly.
+		Unlike the -insecure flag on 'go get', GOINSECURE does not disable
+		checksum database validation. GOPRIVATE or GONOSUMDB may be used
+		to achieve that.
 	GOOS
 		The operating system for which to compile code.
 		Examples are linux, darwin, windows, netbsd.
 	GOPATH
 		For more details see: 'go help gopath'.
 	GOPROXY
-		URL of Go module proxy. See 'go help modules'.
+		URL of Go module proxy. See https://golang.org/ref/mod#environment-variables
+		and https://golang.org/ref/mod#module-proxy for details.
 	GOPRIVATE, GONOPROXY, GONOSUMDB
 		Comma-separated list of glob patterns (in the syntax of Go's path.Match)
 		of module path prefixes that should always be fetched directly
 		or that should not be compared against the checksum database.
-		See 'go help module-private'.
+		See https://golang.org/ref/mod#private-modules.
 	GOROOT
 		The root of the go tree.
 	GOSUMDB
 		The name of checksum database to use and optionally its public key and
-		URL. See 'go help module-auth'.
+		URL. See https://golang.org/ref/mod#authenticating.
 	GOTMPDIR
 		The directory where the go command will write
 		temporary source files, packages, and binaries.
+	GOVCS
+		Lists version control commands that may be used with matching servers.
+		See 'go help vcs'.
 
 Environment variables for use with cgo:
 
@@ -577,8 +591,8 @@ Architecture-specific environment variables:
 		For GOARCH=arm, the ARM architecture for which to compile.
 		Valid values are 5, 6, 7.
 	GO386
-		For GOARCH=386, the floating point instruction set.
-		Valid values are 387, sse2.
+		For GOARCH=386, how to implement floating point instructions.
+		Valid values are sse2 (default), softfloat.
 	GOMIPS
 		For GOARCH=mips{,le}, whether to use floating point instructions.
 		Valid values are hardfloat (default), softfloat.
@@ -627,6 +641,8 @@ Additional information available from 'go env' but not read from the environment
 		If module-aware mode is disabled, GOMOD will be the empty string.
 	GOTOOLDIR
 		The directory where the go tools (compile, cover, doc, etc...) are installed.
+	GOVERSION
+		The version of the installed Go tree, as reported by runtime.Version.
 	`,
 }
 
@@ -760,5 +776,100 @@ The output is voluminous but can be useful for debugging the cache.
 
 GODEBUG=gocachetest=1 causes the go command to print details of its
 decisions about whether to reuse a cached test result.
+`,
+}
+
+var HelpBuildConstraint = &base.Command{
+	UsageLine: "buildconstraint",
+	Short:     "build constraints",
+	Long: `
+A build constraint, also known as a build tag, is a line comment that begins
+
+	// +build
+
+that lists the conditions under which a file should be included in the package.
+Constraints may appear in any kind of source file (not just Go), but
+they must appear near the top of the file, preceded
+only by blank lines and other line comments. These rules mean that in Go
+files a build constraint must appear before the package clause.
+
+To distinguish build constraints from package documentation, a series of
+build constraints must be followed by a blank line.
+
+A build constraint is evaluated as the OR of space-separated options.
+Each option evaluates as the AND of its comma-separated terms.
+Each term consists of letters, digits, underscores, and dots.
+A term may be negated with a preceding !.
+For example, the build constraint:
+
+	// +build linux,386 darwin,!cgo
+
+corresponds to the boolean formula:
+
+	(linux AND 386) OR (darwin AND (NOT cgo))
+
+A file may have multiple build constraints. The overall constraint is the AND
+of the individual constraints. That is, the build constraints:
+
+	// +build linux darwin
+	// +build amd64
+
+corresponds to the boolean formula:
+
+	(linux OR darwin) AND amd64
+
+During a particular build, the following words are satisfied:
+
+	- the target operating system, as spelled by runtime.GOOS, set with the
+	  GOOS environment variable.
+	- the target architecture, as spelled by runtime.GOARCH, set with the
+	  GOARCH environment variable.
+	- the compiler being used, either "gc" or "gccgo"
+	- "cgo", if the cgo command is supported (see CGO_ENABLED in
+	  'go help environment').
+	- a term for each Go major release, through the current version:
+	  "go1.1" from Go version 1.1 onward, "go1.12" from Go 1.12, and so on.
+	- any additional tags given by the -tags flag (see 'go help build').
+
+There are no separate build tags for beta or minor releases.
+
+If a file's name, after stripping the extension and a possible _test suffix,
+matches any of the following patterns:
+	*_GOOS
+	*_GOARCH
+	*_GOOS_GOARCH
+(example: source_windows_amd64.go) where GOOS and GOARCH represent
+any known operating system and architecture values respectively, then
+the file is considered to have an implicit build constraint requiring
+those terms (in addition to any explicit constraints in the file).
+
+Using GOOS=android matches build tags and files as for GOOS=linux
+in addition to android tags and files.
+
+Using GOOS=illumos matches build tags and files as for GOOS=solaris
+in addition to illumos tags and files.
+
+Using GOOS=ios matches build tags and files as for GOOS=darwin
+in addition to ios tags and files.
+
+To keep a file from being considered for the build:
+
+	// +build ignore
+
+(any other unsatisfied word will work as well, but "ignore" is conventional.)
+
+To build a file only when using cgo, and only on Linux and OS X:
+
+	// +build linux,cgo darwin,cgo
+
+Such a file is usually paired with another file implementing the
+default functionality for other systems, which in this case would
+carry the constraint:
+
+	// +build !linux,!darwin !cgo
+
+Naming a file dns_windows.go will cause it to be included only when
+building the package for Windows; similarly, math_386.s will be included
+only when building the package for 32-bit x86.
 `,
 }

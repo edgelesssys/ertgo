@@ -4,7 +4,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Test that incorrect uses of the blank identifer are caught.
+// Test that incorrect uses of the blank identifier are caught.
 // Does not compile.
 
 package _	// ERROR "invalid package name"
@@ -13,7 +13,7 @@ var t struct {
 	_ int
 }
 
-func (x int) _() { // ERROR "cannot define new methods on non-local type"
+func (x int) _() { // ERROR "methods on non-local type"
 	println(x)
 }
 

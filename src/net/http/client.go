@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/url"
 	"reflect"
@@ -216,7 +215,7 @@ func send(ireq *Request, rt RoundTripper, deadline time.Time) (resp *Response, d
 
 	if req.RequestURI != "" {
 		req.closeBody()
-		return nil, alwaysFalse, errors.New("http: Request.RequestURI can't be set in client requests.")
+		return nil, alwaysFalse, errors.New("http: Request.RequestURI can't be set in client requests")
 	}
 
 	// forkReq forks req into a shallow clone of ireq the first
@@ -265,6 +264,25 @@ func send(ireq *Request, rt RoundTripper, deadline time.Time) (resp *Response, d
 		}
 		return nil, didTimeout, err
 	}
+	if resp == nil {
+		return nil, didTimeout, fmt.Errorf("http: RoundTripper implementation (%T) returned a nil *Response with a nil error", rt)
+	}
+	if resp.Body == nil {
+		// The documentation on the Body field says “The http Client and Transport
+		// guarantee that Body is always non-nil, even on responses without a body
+		// or responses with a zero-length body.” Unfortunately, we didn't document
+		// that same constraint for arbitrary RoundTripper implementations, and
+		// RoundTripper implementations in the wild (mostly in tests) assume that
+		// they can use a nil Body to mean an empty one (similar to Request.Body).
+		// (See https://golang.org/issue/38095.)
+		//
+		// If the ContentLength allows the Body to be empty, fill in an empty one
+		// here to ensure that it is non-nil.
+		if resp.ContentLength > 0 && req.Method != "HEAD" {
+			return nil, didTimeout, fmt.Errorf("http: RoundTripper implementation (%T) returned a *Response with content length %d but a nil Body", rt, resp.ContentLength)
+		}
+		resp.Body = io.NopCloser(strings.NewReader(""))
+	}
 	if !deadline.IsZero() {
 		resp.Body = &cancelTimerBody{
 			stop:          stopTimer,
@@ -302,7 +320,7 @@ func knownRoundTripperImpl(rt RoundTripper, req *Request) bool {
 		return true
 	}
 	// There's a very minor chance of a false positive with this.
-	// Insted of detecting our golang.org/x/net/http2.Transport,
+	// Instead of detecting our golang.org/x/net/http2.Transport,
 	// it might detect a Transport type in a different http2
 	// package. But I know of none, and the only problem would be
 	// some temporarily leaked goroutines if the transport didn't
@@ -678,7 +696,7 @@ func (c *Client) do(req *Request) (retres *Response, reterr error) {
 			// fails, the Transport won't reuse it anyway.
 			const maxBodySlurpSize = 2 << 10
 			if resp.ContentLength == -1 || resp.ContentLength <= maxBodySlurpSize {
-				io.CopyN(ioutil.Discard, resp.Body, maxBodySlurpSize)
+				io.CopyN(io.Discard, resp.Body, maxBodySlurpSize)
 			}
 			resp.Body.Close()
 

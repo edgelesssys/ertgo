@@ -16,17 +16,14 @@
 
 set -e
 
-eval $(go env)
-export GOROOT   # the api test requires GOROOT to be set.
+if [ ! -f ../bin/go ]; then
+	echo 'run.bash must be run from $GOROOT/src after installing cmd/go' 1>&2
+	exit 1
+fi
 
-# We disallow local import for non-local packages, if $GOROOT happens
-# to be under $GOPATH, then some tests below will fail.  $GOPATH needs
-# to be set to a non-empty string, else Go will set a default value
-# that may also conflict with $GOROOT.  The $GOPATH value doesn't need
-# to point to an actual directory, it just needs to pass the semantic
-# checks performed by Go.  Use $GOROOT to define $GOPATH so that we
-# don't blunder into a user-defined symbolic link.
-export GOPATH=/dev/null
+eval $(../bin/go env)
+export GOROOT   # The api test requires GOROOT to be set, so set it to match ../bin/go.
+export GOPATH=/nonexist-gopath
 
 unset CDPATH	# in case user has it set
 export GOBIN=$GOROOT/bin  # Issue 14340
@@ -56,4 +53,4 @@ if ulimit -T &> /dev/null; then
 	[ "$(ulimit -H -T)" = "unlimited" ] || ulimit -S -T $(ulimit -H -T)
 fi
 
-exec go tool dist test -rebuild "$@"
+exec ../bin/go tool dist test -rebuild "$@"

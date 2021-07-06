@@ -13,7 +13,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -33,6 +33,7 @@ type checkMode uint
 const (
 	export checkMode = 1 << iota
 	rawFormat
+	normNumber
 	idempotent
 )
 
@@ -56,6 +57,9 @@ func format(src []byte, mode checkMode) ([]byte, error) {
 	cfg := Config{Tabwidth: tabwidth}
 	if mode&rawFormat != 0 {
 		cfg.Mode |= RawFormat
+	}
+	if mode&normNumber != 0 {
+		cfg.Mode |= normalizeNumbers
 	}
 
 	// print AST
@@ -115,7 +119,7 @@ func diff(aname, bname string, a, b []byte) error {
 }
 
 func runcheck(t *testing.T, source, golden string, mode checkMode) {
-	src, err := ioutil.ReadFile(source)
+	src, err := os.ReadFile(source)
 	if err != nil {
 		t.Error(err)
 		return
@@ -129,14 +133,14 @@ func runcheck(t *testing.T, source, golden string, mode checkMode) {
 
 	// update golden files if necessary
 	if *update {
-		if err := ioutil.WriteFile(golden, res, 0644); err != nil {
+		if err := os.WriteFile(golden, res, 0644); err != nil {
 			t.Error(err)
 		}
 		return
 	}
 
 	// get golden
-	gld, err := ioutil.ReadFile(golden)
+	gld, err := os.ReadFile(golden)
 	if err != nil {
 		t.Error(err)
 		return
@@ -165,7 +169,7 @@ func runcheck(t *testing.T, source, golden string, mode checkMode) {
 
 func check(t *testing.T, source, golden string, mode checkMode) {
 	// run the test
-	cc := make(chan int)
+	cc := make(chan int, 1)
 	go func() {
 		runcheck(t, source, golden, mode)
 		cc <- 0
@@ -200,6 +204,8 @@ var data = []entry{
 	{"statements.input", "statements.golden", 0},
 	{"slow.input", "slow.golden", idempotent},
 	{"complit.input", "complit.x", export},
+	{"go2numbers.input", "go2numbers.golden", idempotent},
+	{"go2numbers.input", "go2numbers.norm", normNumber | idempotent},
 }
 
 func TestFiles(t *testing.T) {
@@ -546,7 +552,7 @@ func TestBaseIndent(t *testing.T) {
 	// are not indented (because their values must not change) and make
 	// this test fail.
 	const filename = "printer.go"
-	src, err := ioutil.ReadFile(filename)
+	src, err := os.ReadFile(filename)
 	if err != nil {
 		panic(err) // error in test
 	}
@@ -633,7 +639,7 @@ func (l *limitWriter) Write(buf []byte) (n int, err error) {
 func TestWriteErrors(t *testing.T) {
 	t.Parallel()
 	const filename = "printer.go"
-	src, err := ioutil.ReadFile(filename)
+	src, err := os.ReadFile(filename)
 	if err != nil {
 		panic(err) // error in test
 	}

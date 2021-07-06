@@ -6,6 +6,7 @@
 package loadpe
 
 import (
+	"bytes"
 	"cmd/internal/bio"
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
@@ -16,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 )
 
@@ -145,22 +145,27 @@ func (f *peBiobuf) ReadAt(p []byte, off int64) (int, error) {
 	return n, nil
 }
 
-func Load(l *loader.Loader, arch *sys.Arch, syms *sym.Symbols, input *bio.Reader, pkg string, length int64, pn string) (textp []*sym.Symbol, rsrc *sym.Symbol, err error) {
-	lookup := func(name string, version int) *sym.Symbol {
-		return l.LookupOrCreate(name, version, syms)
+// makeUpdater creates a loader.SymbolBuilder if one hasn't been created previously.
+// We use this to lazily make SymbolBuilders as we don't always need a builder, and creating them for all symbols might be an error.
+func makeUpdater(l *loader.Loader, bld *loader.SymbolBuilder, s loader.Sym) *loader.SymbolBuilder {
+	if bld != nil {
+		return bld
 	}
-	return load(arch, lookup, syms.IncVersion(), input, pkg, length, pn)
+	bld = l.MakeSymbolUpdater(s)
+	return bld
 }
 
-func LoadOld(arch *sys.Arch, syms *sym.Symbols, input *bio.Reader, pkg string, length int64, pn string) (textp []*sym.Symbol, rsrc *sym.Symbol, err error) {
-	return load(arch, syms.Lookup, syms.IncVersion(), input, pkg, length, pn)
-}
-
-// load loads the PE file pn from input.
+// Load loads the PE file pn from input.
 // Symbols are written into syms, and a slice of the text symbols is returned.
-// If an .rsrc section is found, its symbol is returned as rsrc.
-func load(arch *sys.Arch, lookup func(string, int) *sym.Symbol, localSymVersion int, input *bio.Reader, pkg string, length int64, pn string) (textp []*sym.Symbol, rsrc *sym.Symbol, err error) {
-	sectsyms := make(map[*pe.Section]*sym.Symbol)
+// If an .rsrc section or set of .rsrc$xx sections is found, its symbols are
+// returned as rsrc.
+func Load(l *loader.Loader, arch *sys.Arch, localSymVersion int, input *bio.Reader, pkg string, length int64, pn string) (textp []loader.Sym, rsrc []loader.Sym, err error) {
+	lookup := func(name string, version int) (*loader.SymbolBuilder, loader.Sym) {
+		s := l.LookupOrCreateSym(name, version)
+		sb := l.MakeSymbolUpdater(s)
+		return sb, s
+	}
+	sectsyms := make(map[*pe.Section]loader.Sym)
 	sectdata := make(map[*pe.Section][]byte)
 
 	// Some input files are archives containing multiple of
@@ -191,37 +196,37 @@ func load(arch *sys.Arch, lookup func(string, int) *sym.Symbol, localSymVersion 
 		}
 
 		name := fmt.Sprintf("%s(%s)", pkg, sect.Name)
-		s := lookup(name, localSymVersion)
+		bld, s := lookup(name, localSymVersion)
 
 		switch sect.Characteristics & (IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE | IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE) {
 		case IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ: //.rdata
-			s.Type = sym.SRODATA
+			bld.SetType(sym.SRODATA)
 
 		case IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE: //.bss
-			s.Type = sym.SNOPTRBSS
+			bld.SetType(sym.SNOPTRBSS)
 
 		case IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE: //.data
-			s.Type = sym.SNOPTRDATA
+			bld.SetType(sym.SNOPTRDATA)
 
 		case IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ: //.text
-			s.Type = sym.STEXT
+			bld.SetType(sym.STEXT)
 
 		default:
 			return nil, nil, fmt.Errorf("unexpected flags %#06x for PE section %s", sect.Characteristics, sect.Name)
 		}
 
-		if s.Type != sym.SNOPTRBSS {
+		if bld.Type() != sym.SNOPTRBSS {
 			data, err := sect.Data()
 			if err != nil {
 				return nil, nil, err
 			}
 			sectdata[sect] = data
-			s.P = data
+			bld.SetData(data)
 		}
-		s.Size = int64(sect.Size)
+		bld.SetSize(int64(sect.Size))
 		sectsyms[sect] = s
-		if sect.Name == ".rsrc" {
-			rsrc = s
+		if sect.Name == ".rsrc" || strings.HasPrefix(sect.Name, ".rsrc$") {
+			rsrc = append(rsrc, s)
 		}
 	}
 
@@ -242,18 +247,18 @@ func load(arch *sys.Arch, lookup func(string, int) *sym.Symbol, localSymVersion 
 			continue
 		}
 
-		rs := make([]sym.Reloc, rsect.NumberOfRelocations)
+		splitResources := strings.HasPrefix(rsect.Name, ".rsrc$")
+		sb := l.MakeSymbolUpdater(sectsyms[rsect])
 		for j, r := range rsect.Relocs {
-			rp := &rs[j]
 			if int(r.SymbolTableIndex) >= len(f.COFFSymbols) {
 				return nil, nil, fmt.Errorf("relocation number %d symbol index idx=%d cannot be large then number of symbols %d", j, r.SymbolTableIndex, len(f.COFFSymbols))
 			}
 			pesym := &f.COFFSymbols[r.SymbolTableIndex]
-			gosym, err := readpesym(arch, lookup, f, pesym, sectsyms, localSymVersion)
+			_, gosym, err := readpesym(l, arch, l.LookupOrCreateSym, f, pesym, sectsyms, localSymVersion)
 			if err != nil {
 				return nil, nil, err
 			}
-			if gosym == nil {
+			if gosym == 0 {
 				name, err := pesym.FullName(f.StringTable)
 				if err != nil {
 					name = string(pesym.Name[:])
@@ -261,9 +266,11 @@ func load(arch *sys.Arch, lookup func(string, int) *sym.Symbol, localSymVersion 
 				return nil, nil, fmt.Errorf("reloc of invalid sym %s idx=%d type=%d", name, r.SymbolTableIndex, pesym.Type)
 			}
 
-			rp.Sym = gosym
-			rp.Siz = 4
-			rp.Off = int32(r.VirtualAddress)
+			rSym := gosym
+			rSize := uint8(4)
+			rOff := int32(r.VirtualAddress)
+			var rAdd int64
+			var rType objabi.RelocType
 			switch arch.Family {
 			default:
 				return nil, nil, fmt.Errorf("%s: unsupported arch %v", pn, arch.Family)
@@ -275,23 +282,23 @@ func load(arch *sys.Arch, lookup func(string, int) *sym.Symbol, localSymVersion 
 				case IMAGE_REL_I386_REL32, IMAGE_REL_AMD64_REL32,
 					IMAGE_REL_AMD64_ADDR32, // R_X86_64_PC32
 					IMAGE_REL_AMD64_ADDR32NB:
-					rp.Type = objabi.R_PCREL
+					rType = objabi.R_PCREL
 
-					rp.Add = int64(int32(binary.LittleEndian.Uint32(sectdata[rsect][rp.Off:])))
+					rAdd = int64(int32(binary.LittleEndian.Uint32(sectdata[rsect][rOff:])))
 
 				case IMAGE_REL_I386_DIR32NB, IMAGE_REL_I386_DIR32:
-					rp.Type = objabi.R_ADDR
+					rType = objabi.R_ADDR
 
 					// load addend from image
-					rp.Add = int64(int32(binary.LittleEndian.Uint32(sectdata[rsect][rp.Off:])))
+					rAdd = int64(int32(binary.LittleEndian.Uint32(sectdata[rsect][rOff:])))
 
 				case IMAGE_REL_AMD64_ADDR64: // R_X86_64_64
-					rp.Siz = 8
+					rSize = 8
 
-					rp.Type = objabi.R_ADDR
+					rType = objabi.R_ADDR
 
 					// load addend from image
-					rp.Add = int64(binary.LittleEndian.Uint64(sectdata[rsect][rp.Off:]))
+					rAdd = int64(binary.LittleEndian.Uint64(sectdata[rsect][rOff:]))
 				}
 
 			case sys.ARM:
@@ -300,35 +307,38 @@ func load(arch *sys.Arch, lookup func(string, int) *sym.Symbol, localSymVersion 
 					return nil, nil, fmt.Errorf("%s: %v: unknown ARM relocation type %v", pn, sectsyms[rsect], r.Type)
 
 				case IMAGE_REL_ARM_SECREL:
-					rp.Type = objabi.R_PCREL
+					rType = objabi.R_PCREL
 
-					rp.Add = int64(int32(binary.LittleEndian.Uint32(sectdata[rsect][rp.Off:])))
+					rAdd = int64(int32(binary.LittleEndian.Uint32(sectdata[rsect][rOff:])))
 
-				case IMAGE_REL_ARM_ADDR32:
-					rp.Type = objabi.R_ADDR
+				case IMAGE_REL_ARM_ADDR32, IMAGE_REL_ARM_ADDR32NB:
+					rType = objabi.R_ADDR
 
-					rp.Add = int64(int32(binary.LittleEndian.Uint32(sectdata[rsect][rp.Off:])))
+					rAdd = int64(int32(binary.LittleEndian.Uint32(sectdata[rsect][rOff:])))
 
 				case IMAGE_REL_ARM_BRANCH24:
-					rp.Type = objabi.R_CALLARM
+					rType = objabi.R_CALLARM
 
-					rp.Add = int64(int32(binary.LittleEndian.Uint32(sectdata[rsect][rp.Off:])))
+					rAdd = int64(int32(binary.LittleEndian.Uint32(sectdata[rsect][rOff:])))
 				}
 			}
 
 			// ld -r could generate multiple section symbols for the
 			// same section but with different values, we have to take
-			// that into account
-			if issect(pesym) {
-				rp.Add += int64(pesym.Value)
+			// that into account, or in the case of split resources,
+			// the section and its symbols are split into two sections.
+			if issect(pesym) || splitResources {
+				rAdd += int64(pesym.Value)
 			}
+
+			rel, _ := sb.AddRel(rType)
+			rel.SetOff(rOff)
+			rel.SetSiz(rSize)
+			rel.SetSym(rSym)
+			rel.SetAdd(rAdd)
 		}
 
-		sort.Sort(sym.RelocByOff(rs[:rsect.NumberOfRelocations]))
-
-		s := sectsyms[rsect]
-		s.R = rs
-		s.R = s.R[:rsect.NumberOfRelocations]
+		sb.SortRelocs()
 	}
 
 	// enter sub-symbols into symbol table.
@@ -353,6 +363,20 @@ func load(arch *sys.Arch, lookup func(string, int) *sym.Symbol, localSymVersion 
 		if pesym.SectionNumber == IMAGE_SYM_DEBUG {
 			continue
 		}
+		if pesym.SectionNumber == IMAGE_SYM_ABSOLUTE && bytes.Equal(pesym.Name[:], []byte("@feat.00")) {
+			// Microsoft's linker looks at whether all input objects have an empty
+			// section called @feat.00. If all of them do, then it enables SEH;
+			// otherwise it doesn't enable that feature. So, since around the Windows
+			// XP SP2 era, most tools that make PE objects just tack on that section,
+			// so that it won't gimp Microsoft's linker logic. Go doesn't support SEH,
+			// so in theory, none of this really matters to us. But actually, if the
+			// linker tries to ingest an object with @feat.00 -- which are produced by
+			// LLVM's resource compiler, for example -- it chokes because of the
+			// IMAGE_SYM_ABSOLUTE section that it doesn't know how to deal with. Since
+			// @feat.00 is just a marking anyway, skip IMAGE_SYM_ABSOLUTE sections that
+			// are called @feat.00.
+			continue
+		}
 		var sect *pe.Section
 		if pesym.SectionNumber > 0 {
 			sect = f.Sections[pesym.SectionNumber-1]
@@ -361,18 +385,20 @@ func load(arch *sys.Arch, lookup func(string, int) *sym.Symbol, localSymVersion 
 			}
 		}
 
-		s, err := readpesym(arch, lookup, f, pesym, sectsyms, localSymVersion)
+		bld, s, err := readpesym(l, arch, l.LookupOrCreateSym, f, pesym, sectsyms, localSymVersion)
 		if err != nil {
 			return nil, nil, err
 		}
 
 		if pesym.SectionNumber == 0 { // extern
-			if s.Type == sym.SDYNIMPORT {
-				s.SetPlt(-2) // flag for dynimport in PE object files.
+			if l.SymType(s) == sym.SDYNIMPORT {
+				bld = makeUpdater(l, bld, s)
+				bld.SetPlt(-2) // flag for dynimport in PE object files.
 			}
-			if s.Type == sym.SXREF && pesym.Value > 0 { // global data
-				s.Type = sym.SNOPTRDATA
-				s.Size = int64(pesym.Value)
+			if l.SymType(s) == sym.SXREF && pesym.Value > 0 { // global data
+				bld = makeUpdater(l, bld, s)
+				bld.SetType(sym.SNOPTRDATA)
+				bld.SetSize(int64(pesym.Value))
 			}
 
 			continue
@@ -386,29 +412,29 @@ func load(arch *sys.Arch, lookup func(string, int) *sym.Symbol, localSymVersion 
 		}
 
 		if sect == nil {
-			return nil, rsrc, nil
+			return nil, nil, nil
 		}
 
-		if s.Outer != nil {
-			if s.Attr.DuplicateOK() {
+		if l.OuterSym(s) != 0 {
+			if l.AttrDuplicateOK(s) {
 				continue
 			}
-			return nil, nil, fmt.Errorf("%s: duplicate symbol reference: %s in both %s and %s", pn, s.Name, s.Outer.Name, sectsyms[sect].Name)
+			outerName := l.SymName(l.OuterSym(s))
+			sectName := l.SymName(sectsyms[sect])
+			return nil, nil, fmt.Errorf("%s: duplicate symbol reference: %s in both %s and %s", pn, l.SymName(s), outerName, sectName)
 		}
 
+		bld = makeUpdater(l, bld, s)
 		sectsym := sectsyms[sect]
-		s.Sub = sectsym.Sub
-		sectsym.Sub = s
-		s.Type = sectsym.Type
-		s.Attr |= sym.AttrSubSymbol
-		s.Value = int64(pesym.Value)
-		s.Size = 4
-		s.Outer = sectsym
-		if sectsym.Type == sym.STEXT {
-			if s.Attr.External() && !s.Attr.DuplicateOK() {
-				return nil, nil, fmt.Errorf("%s: duplicate symbol definition", s.Name)
+		bld.SetType(l.SymType(sectsym))
+		l.AddInteriorSym(sectsym, s)
+		bld.SetValue(int64(pesym.Value))
+		bld.SetSize(4)
+		if l.SymType(sectsym) == sym.STEXT {
+			if bld.External() && !bld.DuplicateOK() {
+				return nil, nil, fmt.Errorf("%s: duplicate symbol definition", l.SymName(s))
 			}
-			s.Attr |= sym.AttrExternal
+			bld.SetExternal(true)
 		}
 	}
 
@@ -416,23 +442,16 @@ func load(arch *sys.Arch, lookup func(string, int) *sym.Symbol, localSymVersion 
 	// This keeps textp in increasing address order.
 	for _, sect := range f.Sections {
 		s := sectsyms[sect]
-		if s == nil {
+		if s == 0 {
 			continue
 		}
-		if s.Sub != nil {
-			s.Sub = sym.SortSub(s.Sub)
-		}
-		if s.Type == sym.STEXT {
-			if s.Attr.OnList() {
-				return nil, nil, fmt.Errorf("symbol %s listed multiple times", s.Name)
-			}
-			s.Attr |= sym.AttrOnList
-			textp = append(textp, s)
-			for s = s.Sub; s != nil; s = s.Sub {
-				if s.Attr.OnList() {
-					return nil, nil, fmt.Errorf("symbol %s listed multiple times", s.Name)
+		l.SortSub(s)
+		if l.SymType(s) == sym.STEXT {
+			for ; s != 0; s = l.SubSym(s) {
+				if l.AttrOnList(s) {
+					return nil, nil, fmt.Errorf("symbol %s listed multiple times", l.SymName(s))
 				}
-				s.Attr |= sym.AttrOnList
+				l.SetAttrOnList(s, true)
 				textp = append(textp, s)
 			}
 		}
@@ -445,14 +464,14 @@ func issect(s *pe.COFFSymbol) bool {
 	return s.StorageClass == IMAGE_SYM_CLASS_STATIC && s.Type == 0 && s.Name[0] == '.'
 }
 
-func readpesym(arch *sys.Arch, lookup func(string, int) *sym.Symbol, f *pe.File, pesym *pe.COFFSymbol, sectsyms map[*pe.Section]*sym.Symbol, localSymVersion int) (*sym.Symbol, error) {
+func readpesym(l *loader.Loader, arch *sys.Arch, lookup func(string, int) loader.Sym, f *pe.File, pesym *pe.COFFSymbol, sectsyms map[*pe.Section]loader.Sym, localSymVersion int) (*loader.SymbolBuilder, loader.Sym, error) {
 	symname, err := pesym.FullName(f.StringTable)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var name string
 	if issect(pesym) {
-		name = sectsyms[f.Sections[pesym.SectionNumber-1]].Name
+		name = l.SymName(sectsyms[f.Sections[pesym.SectionNumber-1]])
 	} else {
 		name = symname
 		switch arch.Family {
@@ -483,10 +502,11 @@ func readpesym(arch *sys.Arch, lookup func(string, int) *sym.Symbol, f *pe.File,
 		name = name[:i]
 	}
 
-	var s *sym.Symbol
+	var s loader.Sym
+	var bld *loader.SymbolBuilder
 	switch pesym.Type {
 	default:
-		return nil, fmt.Errorf("%s: invalid symbol type %d", symname, pesym.Type)
+		return nil, 0, fmt.Errorf("%s: invalid symbol type %d", symname, pesym.Type)
 
 	case IMAGE_SYM_DTYPE_FUNCTION, IMAGE_SYM_DTYPE_NULL:
 		switch pesym.StorageClass {
@@ -495,19 +515,22 @@ func readpesym(arch *sys.Arch, lookup func(string, int) *sym.Symbol, f *pe.File,
 
 		case IMAGE_SYM_CLASS_NULL, IMAGE_SYM_CLASS_STATIC, IMAGE_SYM_CLASS_LABEL:
 			s = lookup(name, localSymVersion)
-			s.Attr |= sym.AttrDuplicateOK
+			bld = makeUpdater(l, bld, s)
+			bld.SetDuplicateOK(true)
 
 		default:
-			return nil, fmt.Errorf("%s: invalid symbol binding %d", symname, pesym.StorageClass)
+			return nil, 0, fmt.Errorf("%s: invalid symbol binding %d", symname, pesym.StorageClass)
 		}
 	}
 
-	if s != nil && s.Type == 0 && (pesym.StorageClass != IMAGE_SYM_CLASS_STATIC || pesym.Value != 0) {
-		s.Type = sym.SXREF
+	if s != 0 && l.SymType(s) == 0 && (pesym.StorageClass != IMAGE_SYM_CLASS_STATIC || pesym.Value != 0) {
+		bld = makeUpdater(l, bld, s)
+		bld.SetType(sym.SXREF)
 	}
 	if strings.HasPrefix(symname, "__imp_") {
-		s.SetGot(-2) // flag for __imp_
+		bld = makeUpdater(l, bld, s)
+		bld.SetGot(-2) // flag for __imp_
 	}
 
-	return s, nil
+	return bld, s, nil
 }

@@ -15,7 +15,6 @@ import (
 	"internal/poll"
 	"internal/testenv"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -386,7 +385,7 @@ func TestPipeLookPathLeak(t *testing.T) {
 	// Reading /proc/self/fd is more reliable than calling lsof, so try that
 	// first.
 	numOpenFDs := func() (int, []byte, error) {
-		fds, err := ioutil.ReadDir("/proc/self/fd")
+		fds, err := os.ReadDir("/proc/self/fd")
 		if err != nil {
 			return 0, nil, err
 		}
@@ -486,25 +485,6 @@ func numOpenFDsAndroid(t *testing.T) (n int, lsof []byte) {
 		t.Fatalf("error processing lsof output: %v", err)
 	}
 	return bytes.Count(lsof, []byte("\n")), lsof
-}
-
-// basefds returns the number of expected file descriptors
-// to be present in a process at start.
-// stdin, stdout, stderr, epoll/kqueue, epoll/kqueue pipe, maybe testlog
-func basefds() uintptr {
-	n := os.Stderr.Fd() + 1
-	// The poll (epoll/kqueue) descriptor can be numerically
-	// either between stderr and the testlog-fd, or after
-	// testlog-fd.
-	for poll.IsPollDescriptor(n) {
-		n++
-	}
-	for _, arg := range os.Args {
-		if strings.HasPrefix(arg, "-test.testlogfile=") {
-			n++
-		}
-	}
-	return n
 }
 
 func TestExtraFilesFDShuffle(t *testing.T) {
@@ -622,6 +602,11 @@ func TestExtraFiles(t *testing.T) {
 	}
 
 	testenv.MustHaveExec(t)
+	testenv.MustHaveGoBuild(t)
+
+	// This test runs with cgo disabled. External linking needs cgo, so
+	// it doesn't work if external linking is required.
+	testenv.MustInternalLink(t)
 
 	if runtime.GOOS == "windows" {
 		t.Skipf("skipping test on %q", runtime.GOOS)
@@ -651,7 +636,7 @@ func TestExtraFiles(t *testing.T) {
 	// cgo), to make sure none of that potential C code leaks fds.
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	// quiet expected TLS handshake error "remote error: bad certificate"
-	ts.Config.ErrorLog = log.New(ioutil.Discard, "", 0)
+	ts.Config.ErrorLog = log.New(io.Discard, "", 0)
 	ts.StartTLS()
 	defer ts.Close()
 	_, err = http.Get(ts.URL)
@@ -659,7 +644,7 @@ func TestExtraFiles(t *testing.T) {
 		t.Errorf("success trying to fetch %s; want an error", ts.URL)
 	}
 
-	tf, err := ioutil.TempFile("", "")
+	tf, err := os.CreateTemp("", "")
 	if err != nil {
 		t.Fatalf("TempFile: %v", err)
 	}
@@ -676,11 +661,47 @@ func TestExtraFiles(t *testing.T) {
 		t.Fatalf("Seek: %v", err)
 	}
 
-	c := helperCommand(t, "read3")
+	tempdir := t.TempDir()
+	exe := filepath.Join(tempdir, "read3.exe")
+
+	c := exec.Command(testenv.GoToolPath(t), "build", "-o", exe, "read3.go")
+	// Build the test without cgo, so that C library functions don't
+	// open descriptors unexpectedly. See issue 25628.
+	c.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if output, err := c.CombinedOutput(); err != nil {
+		t.Logf("go build -o %s read3.go\n%s", exe, output)
+		t.Fatalf("go build failed: %v", err)
+	}
+
+	// Use a deadline to try to get some output even if the program hangs.
+	ctx := context.Background()
+	if deadline, ok := t.Deadline(); ok {
+		// Leave a 20% grace period to flush output, which may be large on the
+		// linux/386 builders because we're running the subprocess under strace.
+		deadline = deadline.Add(-time.Until(deadline) / 5)
+
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
+
+	c = exec.CommandContext(ctx, exe)
 	var stdout, stderr bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = &stderr
 	c.ExtraFiles = []*os.File{tf}
+	if runtime.GOOS == "illumos" {
+		// Some facilities in illumos are implemented via access
+		// to /proc by libc; such accesses can briefly occupy a
+		// low-numbered fd.  If this occurs concurrently with the
+		// test that checks for leaked descriptors, the check can
+		// become confused and report a spurious leaked descriptor.
+		// (See issue #42431 for more detailed analysis.)
+		//
+		// Attempt to constrain the use of additional threads in the
+		// child process to make this test less flaky:
+		c.Env = append(os.Environ(), "GOMAXPROCS=1")
+	}
 	err = c.Run()
 	if err != nil {
 		t.Fatalf("Run: %v\n--- stdout:\n%s--- stderr:\n%s", err, stdout.Bytes(), stderr.Bytes())
@@ -757,17 +778,6 @@ func TestHelperProcess(*testing.T) {
 	}
 	defer os.Exit(0)
 
-	// Determine which command to use to display open files.
-	ofcmd := "lsof"
-	switch runtime.GOOS {
-	case "dragonfly", "freebsd", "netbsd", "openbsd":
-		ofcmd = "fstat"
-	case "plan9":
-		ofcmd = "/bin/cat"
-	case "aix":
-		ofcmd = "procfiles"
-	}
-
 	args := os.Args
 	for len(args) > 0 {
 		if args[0] == "--" {
@@ -831,7 +841,7 @@ func TestHelperProcess(*testing.T) {
 			}
 		}
 	case "stdinClose":
-		b, err := ioutil.ReadAll(os.Stdin)
+		b, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -841,55 +851,6 @@ func TestHelperProcess(*testing.T) {
 			os.Exit(1)
 		}
 		os.Exit(0)
-	case "read3": // read fd 3
-		fd3 := os.NewFile(3, "fd3")
-		bs, err := ioutil.ReadAll(fd3)
-		if err != nil {
-			fmt.Printf("ReadAll from fd 3: %v", err)
-			os.Exit(1)
-		}
-		// Now verify that there are no other open fds.
-		var files []*os.File
-		for wantfd := basefds() + 1; wantfd <= 100; wantfd++ {
-			if poll.IsPollDescriptor(wantfd) {
-				continue
-			}
-			f, err := os.Open(os.Args[0])
-			if err != nil {
-				fmt.Printf("error opening file with expected fd %d: %v", wantfd, err)
-				os.Exit(1)
-			}
-			if got := f.Fd(); got != wantfd {
-				fmt.Printf("leaked parent file. fd = %d; want %d\n", got, wantfd)
-				var args []string
-				switch runtime.GOOS {
-				case "plan9":
-					args = []string{fmt.Sprintf("/proc/%d/fd", os.Getpid())}
-				case "aix":
-					args = []string{fmt.Sprint(os.Getpid())}
-				default:
-					args = []string{"-p", fmt.Sprint(os.Getpid())}
-				}
-				cmd := exec.Command(ofcmd, args...)
-				out, err := cmd.CombinedOutput()
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "%s failed: %v\n", strings.Join(cmd.Args, " "), err)
-				}
-				fmt.Printf("%s", out)
-				os.Exit(1)
-			}
-			files = append(files, f)
-		}
-		for _, f := range files {
-			f.Close()
-		}
-		// Referring to fd3 here ensures that it is not
-		// garbage collected, and therefore closed, while
-		// executing the wantfd loop above. It doesn't matter
-		// what we do with fd3 as long as we refer to it;
-		// closing it is the easy choice.
-		fd3.Close()
-		os.Stdout.Write(bs)
 	case "exit":
 		n, _ := strconv.Atoi(args[0])
 		os.Exit(n)

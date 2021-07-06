@@ -16,6 +16,7 @@
 package reflect
 
 import (
+	"internal/unsafeheader"
 	"strconv"
 	"sync"
 	"unicode"
@@ -49,13 +50,13 @@ type Type interface {
 	// It panics if i is not in the range [0, NumMethod()).
 	//
 	// For a non-interface type T or *T, the returned Method's Type and Func
-	// fields describe a function whose first argument is the receiver.
+	// fields describe a function whose first argument is the receiver,
+	// and only exported methods are accessible.
 	//
 	// For an interface type, the returned Method's Type field gives the
 	// method signature, without a receiver, and the Func field is nil.
 	//
-	// Only exported methods are accessible and they are sorted in
-	// lexicographic order.
+	// Methods are sorted in lexicographic order.
 	Method(int) Method
 
 	// MethodByName returns the method with that name in the type's
@@ -68,7 +69,9 @@ type Type interface {
 	// method signature, without a receiver, and the Func field is nil.
 	MethodByName(string) (Method, bool)
 
-	// NumMethod returns the number of exported methods in the type's method set.
+	// NumMethod returns the number of methods accessible using Method.
+	//
+	// Note that NumMethod counts unexported methods only for interface types.
 	NumMethod() int
 
 	// Name returns the type's name within its package for a defined type.
@@ -490,7 +493,7 @@ func (n name) name() (s string) {
 	}
 	b := (*[4]byte)(unsafe.Pointer(n.bytes))
 
-	hdr := (*stringHeader)(unsafe.Pointer(&s))
+	hdr := (*unsafeheader.String)(unsafe.Pointer(&s))
 	hdr.Data = unsafe.Pointer(&b[3])
 	hdr.Len = int(b[1])<<8 | int(b[2])
 	return s
@@ -502,7 +505,7 @@ func (n name) tag() (s string) {
 		return ""
 	}
 	nl := n.nameLen()
-	hdr := (*stringHeader)(unsafe.Pointer(&s))
+	hdr := (*unsafeheader.String)(unsafe.Pointer(&s))
 	hdr.Data = unsafe.Pointer(n.data(3+nl+2, "non-empty string"))
 	hdr.Len = tl
 	return s
@@ -656,7 +659,7 @@ func resolveTextOff(rtype unsafe.Pointer, off int32) unsafe.Pointer
 // be resolved correctly. Implemented in the runtime package.
 func addReflectOff(ptr unsafe.Pointer) int32
 
-// resolveReflectType adds a name to the reflection lookup map in the runtime.
+// resolveReflectName adds a name to the reflection lookup map in the runtime.
 // It returns a new nameOff that can be used to refer to the pointer.
 func resolveReflectName(n name) nameOff {
 	return nameOff(addReflectOff(unsafe.Pointer(n.bytes)))
@@ -1788,7 +1791,6 @@ func ChanOf(dir ChanDir, t Type) Type {
 	}
 
 	// Look in known types.
-	// TODO: Precedence when constructing string.
 	var s string
 	switch dir {
 	default:
@@ -1798,7 +1800,16 @@ func ChanOf(dir ChanDir, t Type) Type {
 	case RecvDir:
 		s = "<-chan " + typ.String()
 	case BothDir:
-		s = "chan " + typ.String()
+		typeStr := typ.String()
+		if typeStr[0] == '<' {
+			// typ is recv chan, need parentheses as "<-" associates with leftmost
+			// chan possible, see:
+			// * https://golang.org/ref/spec#Channel_types
+			// * https://github.com/golang/go/issues/39897
+			s = "chan (" + typeStr + ")"
+		} else {
+			s = "chan " + typeStr
+		}
 	}
 	for _, tt := range typesByString(s) {
 		ch := (*chanType)(unsafe.Pointer(tt))
