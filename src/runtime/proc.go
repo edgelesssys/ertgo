@@ -1,4 +1,5 @@
 // Copyright 2014 The Go Authors. All rights reserved.
+// Copyright 2021 Edgeless Systems GmbH. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -655,6 +656,14 @@ func schedinit() {
 	if n, ok := atoi32(gogetenv("GOMAXPROCS")); ok && n > 0 {
 		procs = n
 	}
+
+	// EDG: get EGOMAXTHREADS
+	if n, ok := atoi32(gogetenv("EGOMAXTHREADS")); ok && n > 0 {
+		edgMaxThreads = n
+	} else {
+		edgMaxThreads = sched.maxmcount + 2 // effectively disables our thread limitation
+	}
+
 	if procresize(procs) != nil {
 		throw("unknown runnable goroutine during bootstrap")
 	}
@@ -712,6 +721,12 @@ func mReserveID() int64 {
 	if sched.mnext+1 < sched.mnext {
 		throw("runtime: thread ID overflow")
 	}
+
+	// EDG: limit max threads
+	if mcount() >= edgMaxThreads {
+		return 0
+	}
+
 	id := sched.mnext
 	sched.mnext++
 	checkmcount()
@@ -2369,6 +2384,18 @@ func startm(_p_ *p, spinning bool) {
 		// new M will eventually run the scheduler to execute any
 		// queued G's.
 		id := mReserveID()
+
+		// EDG: limit max threads
+		if id == 0 {
+			edgMovePtoIdle(_p_)
+			unlock(&sched.lock)
+			if spinning && int32(atomic.Xadd(&sched.nmspinning, -1)) < 0 {
+				throw("startm: negative nmspinning")
+			}
+			releasem(mp)
+			return
+		}
+
 		unlock(&sched.lock)
 
 		var fn func()
