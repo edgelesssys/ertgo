@@ -660,8 +660,6 @@ func schedinit() {
 	// EDG: get EGOMAXTHREADS
 	if n, ok := atoi32(gogetenv("EGOMAXTHREADS")); ok && n > 0 {
 		edgMaxThreads = n
-	} else {
-		edgMaxThreads = sched.maxmcount + 2 // effectively disables our thread limitation
 	}
 
 	if procresize(procs) != nil {
@@ -721,12 +719,6 @@ func mReserveID() int64 {
 	if sched.mnext+1 < sched.mnext {
 		throw("runtime: thread ID overflow")
 	}
-
-	// EDG: limit max threads
-	if mcount() >= edgMaxThreads {
-		return 0
-	}
-
 	id := sched.mnext
 	sched.mnext++
 	checkmcount()
@@ -1202,7 +1194,7 @@ func startTheWorldWithSema(emitTraceEvent bool) int64 {
 			notewakeup(&mp.park)
 		} else {
 			// Start M to run P.  Do not start another M below.
-			newm(nil, p, -1)
+			p.edgRunnable = true
 		}
 	}
 
@@ -2312,6 +2304,37 @@ func stopm() {
 	}
 
 	lock(&sched.lock)
+
+	// EDG: Schedule a P marked as runnable in startm, if any.
+	lock(&allpLock)
+	lallp := len(allp)
+	if edgNextP >= lallp {
+		edgNextP = 0
+	}
+	for i := edgNextP; i < lallp; i++ {
+		p := allp[i]
+		if p.edgRunnable {
+			edgNextP = i + 1
+			p.edgRunnable = false
+			acquirep(p)
+			unlock(&allpLock)
+			unlock(&sched.lock)
+			return
+		}
+	}
+	for i := 0; i < edgNextP; i++ {
+		p := allp[i]
+		if p.edgRunnable {
+			edgNextP = i + 1
+			p.edgRunnable = false
+			acquirep(p)
+			unlock(&allpLock)
+			unlock(&sched.lock)
+			return
+		}
+	}
+	unlock(&allpLock)
+
 	mput(_g_.m)
 	unlock(&sched.lock)
 	mPark()
@@ -2354,6 +2377,20 @@ func startm(_p_ *p, spinning bool) {
 	// disable preemption before acquiring a P from pidleget below.
 	mp := acquirem()
 	lock(&sched.lock)
+
+	// EDG: limit max threads
+	if mcount() >= edgMaxThreads && sched.midle == 0 {
+		if _p_ != nil {
+			_p_.edgRunnable = true
+		}
+		unlock(&sched.lock)
+		if spinning && int32(atomic.Xadd(&sched.nmspinning, -1)) < 0 {
+			throw("startm: negative nmspinning")
+		}
+		releasem(mp)
+		return
+	}
+
 	if _p_ == nil {
 		_p_ = pidleget()
 		if _p_ == nil {
@@ -2384,18 +2421,6 @@ func startm(_p_ *p, spinning bool) {
 		// new M will eventually run the scheduler to execute any
 		// queued G's.
 		id := mReserveID()
-
-		// EDG: limit max threads
-		if id == 0 {
-			edgMovePtoIdle(_p_)
-			unlock(&sched.lock)
-			if spinning && int32(atomic.Xadd(&sched.nmspinning, -1)) < 0 {
-				throw("startm: negative nmspinning")
-			}
-			releasem(mp)
-			return
-		}
-
 		unlock(&sched.lock)
 
 		var fn func()
@@ -2654,6 +2679,22 @@ top:
 	// local runq
 	if gp, inheritTime := runqget(_p_); gp != nil {
 		return gp, inheritTime
+	}
+
+	// EDG: Schedule a P marked as runnable in startm, if any.
+	// This prevents starving of those Ps in cases where the global runq is never empty.
+	if !_g_.m.spinning && atomic.Xadd(&edgSchedP, 1)%8 == 0 {
+		lock(&allpLock)
+		for _, p := range allp {
+			if p.edgRunnable {
+				releasep()
+				_p_.edgRunnable = true
+				unlock(&allpLock)
+				stopm()
+				goto top
+			}
+		}
+		unlock(&allpLock)
 	}
 
 	// global runq

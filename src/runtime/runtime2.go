@@ -642,6 +642,9 @@ type p struct {
 
 	palloc persistentAlloc // per-P to avoid mutex
 
+	// EDG: mark P as runnable in startm if max threads are reached
+	edgRunnable bool
+
 	_ uint32 // Alignment for atomic fields below
 
 	// The when field of the first entry on the timer heap.

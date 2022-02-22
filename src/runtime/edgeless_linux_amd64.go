@@ -4,22 +4,8 @@
 
 package runtime
 
-var edgMaxThreads int32
-
-func edgMovePtoIdle(pp *p) {
-	// copied from p.destroy
-	// Move all runnable goroutines to the global queue
-	for pp.runqhead != pp.runqtail {
-		// Pop from tail of local queue
-		pp.runqtail--
-		gp := pp.runq[pp.runqtail%uint32(len(pp.runq))].ptr()
-		// Push onto head of global queue
-		globrunqputhead(gp)
-	}
-	if pp.runnext != 0 {
-		globrunqputhead(pp.runnext.ptr())
-		pp.runnext = 0
-	}
-
-	pidleput(pp)
-}
+var (
+	edgMaxThreads int32 = 11000
+	edgNextP      int
+	edgSchedP     uint32
+)
