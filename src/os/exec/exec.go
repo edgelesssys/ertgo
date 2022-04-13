@@ -374,6 +374,11 @@ func lookExtensions(path, dir string) (string, error) {
 // The Wait method will return the exit code and release associated resources
 // once the command exits.
 func (c *Cmd) Start() error {
+	// EDG: fail in enclave
+	if os.Getenv("OE_IS_ENCLAVE") != "" {
+		return errors.New("exec not supported")
+	}
+
 	if c.lookPathErr != nil {
 		c.closeDescriptors(c.closeAfterStart)
 		c.closeDescriptors(c.closeAfterWait)

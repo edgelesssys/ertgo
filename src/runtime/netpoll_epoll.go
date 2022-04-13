@@ -40,7 +40,16 @@ func netpollinit() {
 		closeonexec(epfd)
 	}
 	r, w, errno := nonblockingPipe()
-	if errno != 0 {
+	if errno == -_ENOSYS {
+		// EDG: use eventfd if pipe is not available (in ERT)
+		r = eventfd(0, _O_NONBLOCK|_O_CLOEXEC)
+		if r < 0 {
+			println("runtime: pipe failed with", -errno)
+			println("runtime: eventfd failed with", -r)
+			throw("runtime: pipe and eventfd failed")
+		}
+		w = r
+	} else if errno != 0 {
 		println("runtime: pipe failed with", -errno)
 		throw("runtime: pipe failed")
 	}
@@ -56,6 +65,7 @@ func netpollinit() {
 	netpollBreakRd = uintptr(r)
 	netpollBreakWr = uintptr(w)
 }
+func eventfd(count uint32, flags int32) int32
 
 func netpollIsPollDescriptor(fd uintptr) bool {
 	return fd == uintptr(epfd) || fd == netpollBreakRd || fd == netpollBreakWr
@@ -81,9 +91,11 @@ func netpollarm(pd *pollDesc, mode int) {
 func netpollBreak() {
 	if atomic.Cas(&netpollWakeSig, 0, 1) {
 		for {
-			var b byte
-			n := write(netpollBreakWr, unsafe.Pointer(&b), 1)
-			if n == 1 {
+			// EDG: Can be pipe or eventfd (see comment in netpollinit). The following works for both.
+			b := []byte{1, 0, 0, 0, 0, 0, 0, 0}
+			l := int32(len(b))
+			n := write(netpollBreakWr, unsafe.Pointer(&b[0]), l)
+			if n == l {
 				break
 			}
 			if n == -_EINTR {
