@@ -1,4 +1,4 @@
-// +build windows
+//go:build windows
 
 package runtime_test
 
@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"fmt"
 	"internal/testenv"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -25,18 +24,15 @@ func TestVectoredHandlerDontCrashOnLibrary(t *testing.T) {
 		t.Skip("this test can only run on windows/amd64")
 	}
 	testenv.MustHaveGoBuild(t)
+	testenv.MustHaveCGO(t)
 	testenv.MustHaveExecPath(t, "gcc")
 	testprog.Lock()
 	defer testprog.Unlock()
-	dir, err := os.MkdirTemp("", "go-build")
-	if err != nil {
-		t.Fatalf("failed to create temp directory: %v", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	// build go dll
 	dll := filepath.Join(dir, "testwinlib.dll")
-	cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", dll, "--buildmode", "c-shared", "testdata/testwinlib/main.go")
+	cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", dll, "-buildmode", "c-shared", "testdata/testwinlib/main.go")
 	out, err := testenv.CleanCmdEnv(cmd).CombinedOutput()
 	if err != nil {
 		t.Fatalf("failed to build go library: %s\n%s", err, out)
@@ -153,18 +149,15 @@ func TestLibraryCtrlHandler(t *testing.T) {
 		t.Skip("this test can only run on windows/amd64")
 	}
 	testenv.MustHaveGoBuild(t)
+	testenv.MustHaveCGO(t)
 	testenv.MustHaveExecPath(t, "gcc")
 	testprog.Lock()
 	defer testprog.Unlock()
-	dir, err := os.MkdirTemp("", "go-build")
-	if err != nil {
-		t.Fatalf("failed to create temp directory: %v", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	// build go dll
 	dll := filepath.Join(dir, "dummy.dll")
-	cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", dll, "--buildmode", "c-shared", "testdata/testwinlibsignal/dummy.go")
+	cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", dll, "-buildmode", "c-shared", "testdata/testwinlibsignal/dummy.go")
 	out, err := testenv.CleanCmdEnv(cmd).CombinedOutput()
 	if err != nil {
 		t.Fatalf("failed to build go library: %s\n%s", err, out)
