@@ -40,7 +40,9 @@ var cgoEnabled = map[string]bool{
 	"openbsd/amd64": true,
 	"openbsd/arm": true,
 	"openbsd/arm64": true,
+	"openbsd/mips64": true,
 	"solaris/amd64": true,
 	"windows/386": true,
 	"windows/amd64": true,
+	"windows/arm64": true,
 }
