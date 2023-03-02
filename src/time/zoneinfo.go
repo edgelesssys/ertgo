@@ -100,9 +100,30 @@ func (l *Location) String() string {
 	return l.get().name
 }
 
+var unnamedFixedZones []*Location
+var unnamedFixedZonesOnce sync.Once
+
 // FixedZone returns a Location that always uses
 // the given zone name and offset (seconds east of UTC).
 func FixedZone(name string, offset int) *Location {
+	// Most calls to FixedZone have an unnamed zone with an offset by the hour.
+	// Optimize for that case by returning the same *Location for a given hour.
+	const hoursBeforeUTC = 12
+	const hoursAfterUTC = 14
+	hour := offset / 60 / 60
+	if name == "" && -hoursBeforeUTC <= hour && hour <= +hoursAfterUTC && hour*60*60 == offset {
+		unnamedFixedZonesOnce.Do(func() {
+			unnamedFixedZones = make([]*Location, hoursBeforeUTC+1+hoursAfterUTC)
+			for hr := -hoursBeforeUTC; hr <= +hoursAfterUTC; hr++ {
+				unnamedFixedZones[hr+hoursBeforeUTC] = fixedZone("", hr*60*60)
+			}
+		})
+		return unnamedFixedZones[hour+hoursBeforeUTC]
+	}
+	return fixedZone(name, offset)
+}
+
+func fixedZone(name string, offset int) *Location {
 	l := &Location{
 		name:       name,
 		zone:       []zone{{name, offset, false}},
@@ -197,14 +218,14 @@ func (l *Location) lookup(sec int64) (name string, offset int, start, end int64,
 // The reference implementation in localtime.c from
 // https://www.iana.org/time-zones/repository/releases/tzcode2013g.tar.gz
 // implements the following algorithm for these cases:
-// 1) If the first zone is unused by the transitions, use it.
-// 2) Otherwise, if there are transition times, and the first
-//    transition is to a zone in daylight time, find the first
-//    non-daylight-time zone before and closest to the first transition
-//    zone.
-// 3) Otherwise, use the first zone that is not daylight time, if
-//    there is one.
-// 4) Otherwise, use the first zone.
+//  1. If the first zone is unused by the transitions, use it.
+//  2. Otherwise, if there are transition times, and the first
+//     transition is to a zone in daylight time, find the first
+//     non-daylight-time zone before and closest to the first transition
+//     zone.
+//  3. Otherwise, use the first zone that is not daylight time, if
+//     there is one.
+//  4. Otherwise, use the first zone.
 func (l *Location) lookupFirstZone() int {
 	// Case 1.
 	if !l.firstZoneUsed() {
@@ -634,10 +655,10 @@ var zoneinfoOnce sync.Once
 // LoadLocation looks for the IANA Time Zone database in the following
 // locations in order:
 //
-// - the directory or uncompressed zip file named by the ZONEINFO environment variable
-// - on a Unix system, the system standard installation location
-// - $GOROOT/lib/time/zoneinfo.zip
-// - the time/tzdata package, if it was imported
+//   - the directory or uncompressed zip file named by the ZONEINFO environment variable
+//   - on a Unix system, the system standard installation location
+//   - $GOROOT/lib/time/zoneinfo.zip
+//   - the time/tzdata package, if it was imported
 func LoadLocation(name string) (*Location, error) {
 	if name == "" || name == "UTC" {
 		return UTC, nil
@@ -665,7 +686,7 @@ func LoadLocation(name string) (*Location, error) {
 			firstErr = err
 		}
 	}
-	if z, err := loadLocation(name, zoneSources); err == nil {
+	if z, err := loadLocation(name, platformZoneSources); err == nil {
 		return z, nil
 	} else if firstErr == nil {
 		firstErr = err
