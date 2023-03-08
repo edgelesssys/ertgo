@@ -214,17 +214,25 @@ TEXT runtime·sigfwd(SB),NOSPLIT,$0-32
 // This is the function registered during sigaction and is invoked when
 // a signal is received. It just redirects to the Go function sigtrampgo.
 // Called using C ABI.
-TEXT runtime·sigtramp(SB),NOSPLIT,$0
+TEXT runtime·sigtramp(SB),NOSPLIT|TOPFRAME,$0
 	// Transition from C ABI to Go ABI.
 	PUSH_REGS_HOST_TO_ABI0()
 
-	// Call into the Go signal handler
+	// Set up ABIInternal environment: g in R14, cleared X15.
+	get_tls(R12)
+	MOVQ	g(R12), R14
+	PXOR	X15, X15
+
+	// Reserve space for spill slots.
 	NOP	SP		// disable vet stack checking
-	ADJSP	$24
-	MOVL	DI, 0(SP)	// sig
-	MOVQ	SI, 8(SP)	// info
-	MOVQ	DX, 16(SP)	// ctx
-	CALL	·sigtrampgo(SB)
+	ADJSP   $24
+
+	// Call into the Go signal handler
+	MOVQ	DI, AX	// sig
+	MOVQ	SI, BX	// info
+	MOVQ	DX, CX	// ctx
+	CALL	·sigtrampgo<ABIInternal>(SB)
+
 	ADJSP	$-24
 
 	POP_REGS_HOST_TO_ABI0()
@@ -589,6 +597,15 @@ TEXT runtime·pthread_kill_trampoline(SB),NOSPLIT,$0
 	POPQ	BP
 	RET
 
+TEXT runtime·osinit_hack_trampoline(SB),NOSPLIT,$0
+	PUSHQ	BP
+	MOVQ	SP, BP
+	MOVQ	$0, DI	// arg 1 val
+	CALL	libc_notify_is_valid_token(SB)
+	CALL	libc_xpc_date_create_from_current(SB)
+	POPQ	BP
+	RET
+
 // syscall calls a function in libc on behalf of the syscall package.
 // syscall takes a pointer to a struct like:
 // struct {
@@ -824,6 +841,65 @@ TEXT runtime·syscall6X(SB),NOSPLIT,$0
 	MOVLQSX	(AX), AX
 	MOVQ	(SP), DI
 	MOVQ	AX, (9*8)(DI) // err
+
+ok:
+	XORL	AX, AX        // no error (it's ignored anyway)
+	MOVQ	BP, SP
+	POPQ	BP
+	RET
+
+// syscall9 calls a function in libc on behalf of the syscall package.
+// syscall9 takes a pointer to a struct like:
+// struct {
+//	fn    uintptr
+//	a1    uintptr
+//	a2    uintptr
+//	a3    uintptr
+//	a4    uintptr
+//	a5    uintptr
+//	a6    uintptr
+//	a7    uintptr
+//	a8    uintptr
+//	a9    uintptr
+//	r1    uintptr
+//	r2    uintptr
+//	err   uintptr
+// }
+// syscall9 must be called on the g0 stack with the
+// C calling convention (use libcCall).
+//
+// syscall9 expects a 32-bit result and tests for 32-bit -1
+// to decide there was an error.
+TEXT runtime·syscall9(SB),NOSPLIT,$0
+	PUSHQ	BP
+	MOVQ	SP, BP
+	SUBQ	$16, SP
+	MOVQ	(0*8)(DI), R13// fn
+	MOVQ	(2*8)(DI), SI // a2
+	MOVQ	(3*8)(DI), DX // a3
+	MOVQ	(4*8)(DI), CX // a4
+	MOVQ	(5*8)(DI), R8 // a5
+	MOVQ	(6*8)(DI), R9 // a6
+	MOVQ	(7*8)(DI), R10 // a7
+	MOVQ	(8*8)(DI), R11 // a8
+	MOVQ	(9*8)(DI), R12 // a9
+	MOVQ	DI, (SP)
+	MOVQ	(1*8)(DI), DI // a1
+	XORL	AX, AX	      // vararg: say "no float args"
+
+	CALL	R13
+
+	MOVQ	(SP), DI
+	MOVQ	AX, (10*8)(DI) // r1
+	MOVQ	DX, (11*8)(DI) // r2
+
+	CMPL	AX, $-1
+	JNE	ok
+
+	CALL	libc_error(SB)
+	MOVLQSX	(AX), AX
+	MOVQ	(SP), DI
+	MOVQ	AX, (12*8)(DI) // err
 
 ok:
 	XORL	AX, AX        // no error (it's ignored anyway)

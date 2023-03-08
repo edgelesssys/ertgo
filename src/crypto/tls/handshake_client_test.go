@@ -1257,7 +1257,7 @@ func TestServerSelectingUnconfiguredApplicationProtocol(t *testing.T) {
 		cipherSuite:  TLS_RSA_WITH_AES_128_GCM_SHA256,
 		alpnProtocol: "how-about-this",
 	}
-	serverHelloBytes := serverHello.marshal()
+	serverHelloBytes := mustMarshal(t, serverHello)
 
 	s.Write([]byte{
 		byte(recordTypeHandshake),
@@ -1500,7 +1500,7 @@ func TestServerSelectingUnconfiguredCipherSuite(t *testing.T) {
 		random:      make([]byte, 32),
 		cipherSuite: TLS_RSA_WITH_AES_256_GCM_SHA384,
 	}
-	serverHelloBytes := serverHello.marshal()
+	serverHelloBytes := mustMarshal(t, serverHello)
 
 	s.Write([]byte{
 		byte(recordTypeHandshake),
@@ -2564,7 +2564,7 @@ func testResumptionKeepsOCSPAndSCT(t *testing.T, ver uint16) {
 	}
 }
 
-// TestClientHandshakeContextCancellation tests that cancelling
+// TestClientHandshakeContextCancellation tests that canceling
 // the context given to the client side conn.HandshakeContext
 // interrupts the in-progress handshake.
 func TestClientHandshakeContextCancellation(t *testing.T) {
