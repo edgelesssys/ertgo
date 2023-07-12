@@ -86,6 +86,10 @@ standard output, even if the test printed them to its own standard
 error. (The go command's standard error is reserved for printing
 errors building the tests.)
 
+The go command places $GOROOT/bin at the beginning of $PATH
+in the test's environment, so that tests that execute
+'go' commands use the same 'go' as the parent 'go test' command.
+
 Go test runs in two different modes:
 
 The first, called local directory mode, occurs when go test is
@@ -1144,7 +1148,15 @@ func (lockedStdout) Write(b []byte) (int, error) {
 
 func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action) error {
 	// Wait for previous test to get started and print its first json line.
-	<-r.prev
+	select {
+	case <-r.prev:
+	case <-base.Interrupted:
+		// We can't wait for the previous test action to complete: we don't start
+		// new actions after an interrupt, so if that action wasn't already running
+		// it might never happen. Instead, just don't log anything for this action.
+		base.SetExitStatus(1)
+		return nil
+	}
 
 	if a.Failed {
 		// We were unable to build the binary.
