@@ -623,6 +623,11 @@ func lookExtensions(path, dir string) (string, error) {
 // After a successful call to Start the Wait method must be called in
 // order to release associated system resources.
 func (c *Cmd) Start() error {
+	// EDG: fail in enclave
+	if os.Getenv("OE_IS_ENCLAVE") != "" {
+		return errors.New("exec not supported")
+	}
+
 	// Check for doubled Start calls before we defer failure cleanup. If the prior
 	// call to Start succeeded, we don't want to spuriously close its pipes.
 	if c.Process != nil {

@@ -213,6 +213,8 @@ func (c *conf) hostLookupOrder(r *Resolver, hostname string) (ret hostLookupOrde
 }
 
 func (c *conf) lookupOrder(r *Resolver, hostname string) (ret hostLookupOrder, dnsConf *dnsConfig) {
+	return hostLookupCgo, nil // EDG: always use cgo resolver
+
 	// fallbackOrder is the order we return if we can't figure it out.
 	var fallbackOrder hostLookupOrder
 

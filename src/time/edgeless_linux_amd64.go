@@ -1,0 +1,3 @@
+package time
+
+import "C"

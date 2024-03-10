@@ -32,7 +32,7 @@ TEXT ·Syscall6<ABIInternal>(SB),NOSPLIT,$0
 	MOVQ	CX, SI  // a2
 	MOVQ	BX, DI  // a1
 	// num already in AX.
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	ok
 	NEGQ	AX

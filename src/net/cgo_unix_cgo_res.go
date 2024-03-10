@@ -31,8 +31,3 @@ func _C_res_ninit(state *_C_struct___res_state) error {
 func _C_res_nclose(state *_C_struct___res_state) {
 	return
 }
-
-func _C_res_nsearch(state *_C_struct___res_state, dname *_C_char, class, typ int, ans *_C_uchar, anslen int) (int, error) {
-	x, err := C.res_search(dname, C.int(class), C.int(typ), ans, C.int(anslen))
-	return int(x), err
-}

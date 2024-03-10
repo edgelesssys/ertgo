@@ -40,7 +40,7 @@ TEXT ·rawSyscallNoError(SB),NOSPLIT,$0-48
 	MOVQ	a2+16(FP), SI
 	MOVQ	a3+24(FP), DX
 	MOVQ	trap+0(FP), AX	// syscall entry
-	SYSCALL
+	CALL	runtime·invoke_libc_syscall(SB)
 	MOVQ	AX, r1+32(FP)
 	MOVQ	DX, r2+40(FP)
 	RET
