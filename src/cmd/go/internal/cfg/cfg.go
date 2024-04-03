@@ -132,7 +132,7 @@ func defaultContext() build.Context {
 	//	2. Otherwise, if this is a cross-compile, disable cgo.
 	//	3. Otherwise, use built-in default for GOOS/GOARCH.
 	// Recreate that logic here with the new GOOS/GOARCH setting.
-	if v := Getenv("CGO_ENABLED"); v == "0" || v == "1" {
+	if v := Getenv("EGO_ENABLED"); v == "0" || v == "1" {
 		ctxt.CgoEnabled = v[0] == '1'
 	} else if ctxt.GOOS != runtime.GOOS || ctxt.GOARCH != runtime.GOARCH {
 		ctxt.CgoEnabled = false

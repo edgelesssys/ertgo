@@ -530,7 +530,7 @@ func (b *Builder) build(ctx context.Context, a *Action) (err error) {
 	}
 
 	if p.Module != nil && !allowedVersion(p.Module.GoVersion) {
-		return errors.New("module requires Go " + p.Module.GoVersion + " or later")
+		fmt.Fprintln(os.Stderr, "ertgo: warning:", errors.New("module requires Go "+p.Module.GoVersion+" or later"))
 	}
 
 	if err := b.checkDirectives(a); err != nil {

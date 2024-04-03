@@ -1670,7 +1670,7 @@ func commitRequirements(ctx context.Context, opts WriteOpts) (err error) {
 	if goVersion == "" {
 		base.Fatalf("go: internal error: missing go root module in WriteGoMod")
 	}
-	if gover.Compare(goVersion, gover.Local()) > 0 {
+	if gover.Compare(goVersion, gover.Local()) > 0 && cfg.CmdName != "build" {
 		// We cannot assume that we know how to update a go.mod to a newer version.
 		return &gover.TooNewError{What: "updating go.mod", GoVersion: goVersion}
 	}

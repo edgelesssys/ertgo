@@ -334,7 +334,7 @@ func defaultContext() Context {
 
 	defaultReleaseTags = append([]string{}, c.ReleaseTags...) // our own private copy
 
-	env := os.Getenv("CGO_ENABLED")
+	env := os.Getenv("EGO_ENABLED")
 	if env == "" {
 		env = defaultCGO_ENABLED
 	}
