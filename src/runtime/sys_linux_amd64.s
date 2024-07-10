@@ -738,6 +738,7 @@ noswitch:
 	MOVQ	DI, SI
 	MOVQ	AX, DI
 	CALL 	libc_syscall(SB)
+	XORPS	X15, X15	// workaround for Occlum not preserving this register, see https://github.com/occlum/occlum/issues/1585#issuecomment-2220213266
 	MOVQ	R12, SP		// Restore real SP
 	CMPQ	AX, $-1
 	JE	err
