@@ -53,7 +53,7 @@ func ReadModFile(gomod string, fix modfile.VersionFixer) (data []byte, f *modfil
 		if f.Toolchain != nil {
 			toolchain = f.Toolchain.Name
 		}
-		return nil, nil, &gover.TooNewError{What: gomod, GoVersion: f.Go.Version, Toolchain: toolchain}
+		fmt.Fprintln(os.Stderr, "ertgo: warning:", &gover.TooNewError{What: gomod, GoVersion: f.Go.Version, Toolchain: toolchain})
 	}
 	if f.Module == nil {
 		// No module declaration. Must add module path.
@@ -717,7 +717,7 @@ func rawGoModSummary(m module.Version) (*modFileSummary, error) {
 		if summary.goVersion != "" && gover.Compare(summary.goVersion, gover.GoStrictVersion) >= 0 {
 			summary.require = append(summary.require, module.Version{Path: "go", Version: summary.goVersion})
 			if gover.Compare(summary.goVersion, gover.Local()) > 0 {
-				return summary, &gover.TooNewError{What: "module " + m.String(), GoVersion: summary.goVersion}
+				fmt.Fprintln(os.Stderr, "ertgo: warning:", &gover.TooNewError{What: "module " + m.String(), GoVersion: summary.goVersion})
 			}
 		}
 
