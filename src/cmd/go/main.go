@@ -90,6 +90,11 @@ func init() {
 		test.HelpTestfunc,
 		modget.HelpVCS,
 	}
+
+	// EDG: set default buildmode to pie instead of exe
+	if os.Getenv("EGO_ENABLED") != "0" {
+		work.CmdBuild.Flag.Lookup("buildmode").Value.Set("pie")
+	}
 }
 
 var _ = go11tag
