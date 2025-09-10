@@ -231,7 +231,7 @@ tryAcquire:
 		// Collect times for mutex profile (seen in unlock2 only via mWaitList),
 		// and for "/sync/mutex/wait/total:seconds" metric (to match).
 		if !haveTimers {
-			gp.m.mWaitList.startTicks = cputicks()
+			gp.m.mWaitList.startTicks = 0
 			startTime = gp.m.mLockProfile.start()
 			haveTimers = true
 		}
