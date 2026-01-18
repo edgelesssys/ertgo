@@ -402,6 +402,10 @@ func (fd *FD) Init(net string, pollable bool) error {
 	fd.rop.fd = fd
 	fd.wop.fd = fd
 
+	if !pollable {
+		return nil
+	}
+
 	// It is safe to add overlapped handles that also perform I/O
 	// outside of the runtime poller. The runtime poller will ignore
 	// I/O completion notifications not initiated by us.
@@ -636,12 +640,22 @@ func (fd *FD) Pread(b []byte, off int64) (int, error) {
 
 	fd.l.Lock()
 	defer fd.l.Unlock()
-	curoffset, err := syscall.Seek(fd.Sysfd, 0, io.SeekCurrent)
-	if err != nil {
-		return 0, err
+	if fd.isBlocking {
+		curoffset, err := syscall.Seek(fd.Sysfd, 0, io.SeekCurrent)
+		if err != nil {
+			return 0, err
+		}
+		defer syscall.Seek(fd.Sysfd, curoffset, io.SeekStart)
+		defer fd.setOffset(curoffset)
+	} else {
+		// Overlapped handles don't have the file pointer updated
+		// when performing I/O operations, so there is no need to
+		// call Seek to reset the file pointer.
+		// Also, some overlapped file handles don't support seeking.
+		// See https://go.dev/issues/74951.
+		curoffset := fd.offset
+		defer fd.setOffset(curoffset)
 	}
-	defer syscall.Seek(fd.Sysfd, curoffset, io.SeekStart)
-	defer fd.setOffset(curoffset)
 	o := &fd.rop
 	o.InitBuf(b)
 	fd.setOffset(off)
@@ -852,12 +866,22 @@ func (fd *FD) Pwrite(buf []byte, off int64) (int, error) {
 
 	fd.l.Lock()
 	defer fd.l.Unlock()
-	curoffset, err := syscall.Seek(fd.Sysfd, 0, io.SeekCurrent)
-	if err != nil {
-		return 0, err
+	if fd.isBlocking {
+		curoffset, err := syscall.Seek(fd.Sysfd, 0, io.SeekCurrent)
+		if err != nil {
+			return 0, err
+		}
+		defer syscall.Seek(fd.Sysfd, curoffset, io.SeekStart)
+		defer fd.setOffset(curoffset)
+	} else {
+		// Overlapped handles don't have the file pointer updated
+		// when performing I/O operations, so there is no need to
+		// call Seek to reset the file pointer.
+		// Also, some overlapped file handles don't support seeking.
+		// See https://go.dev/issues/74951.
+		curoffset := fd.offset
+		defer fd.setOffset(curoffset)
 	}
-	defer syscall.Seek(fd.Sysfd, curoffset, io.SeekStart)
-	defer fd.setOffset(curoffset)
 
 	var ntotal int
 	for {

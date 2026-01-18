@@ -1883,6 +1883,34 @@ func TestFileOverlappedSeek(t *testing.T) {
 	}
 }
 
+func TestFileOverlappedReadAtVolume(t *testing.T) {
+	// Test that we can use File.ReadAt with an overlapped volume handle.
+	// See https://go.dev/issues/74951.
+	t.Parallel()
+	name := `\\.\` + filepath.VolumeName(t.TempDir())
+	namep, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := syscall.CreateFile(namep,
+		syscall.GENERIC_READ|syscall.GENERIC_WRITE,
+		syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_READ,
+		nil, syscall.OPEN_ALWAYS, syscall.FILE_FLAG_OVERLAPPED, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+			t.Skip("skipping test: access denied")
+		}
+		t.Fatal(err)
+	}
+	f := os.NewFile(uintptr(h), name)
+	defer f.Close()
+
+	var buf [0]byte
+	if _, err := f.ReadAt(buf[:], 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPipe(t *testing.T) {
 	t.Parallel()
 	r, w, err := os.Pipe()
@@ -2180,4 +2208,43 @@ func TestSplitPath(t *testing.T) {
 			t.Errorf("splitPath(%q) = %q, %q, want %q, %q", tt.path, dir, base, tt.wantDir, tt.wantBase)
 		}
 	}
+}
+
+func TestNewFileStdinBlocked(t *testing.T) {
+	// See https://go.dev/issue/75949.
+	t.Parallel()
+
+	// Use a subprocess to test that os.NewFile on a blocked stdin works.
+	// Can't do it in the same process because os.NewFile would close
+	// stdin for the whole test process once the test ends.
+	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
+		// In the child process, just exit.
+		// If we get here, the os package successfully initialized.
+		os.Exit(0)
+	}
+	name := pipeName()
+	stdin := newBytePipe(t, name, false)
+	file := newFileOverlapped(t, name, false)
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		// Block stdin on a read.
+		if _, err := stdin.Read(make([]byte, 1)); err != nil {
+			t.Error(err)
+		}
+	})
+
+	time.Sleep(100 * time.Millisecond) // Give time for the read to start.
+	cmd := testenv.CommandContext(t, t.Context(), testenv.Executable(t), fmt.Sprintf("-test.run=^%s$", t.Name()))
+	cmd.Env = cmd.Environ()
+	cmd.Env = append(cmd.Env, "GO_WANT_HELPER_PROCESS=1")
+	cmd.Stdin = stdin
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	// Unblock the read to let the goroutine exit.
+	if _, err := file.Write(make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait() // Don't leave goroutines behind.
 }
