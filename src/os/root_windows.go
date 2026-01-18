@@ -123,7 +123,7 @@ func openRootInRoot(r *Root, name string) (*Root, error) {
 	if err != nil {
 		return nil, &PathError{Op: "openat", Path: name, Err: err}
 	}
-	return newRoot(fd, name)
+	return newRoot(fd, joinPath(r.Name(), name))
 }
 
 // rootOpenFileNolog is Root.OpenFile.
@@ -135,7 +135,7 @@ func rootOpenFileNolog(root *Root, name string, flag int, perm FileMode) (*File,
 		return nil, &PathError{Op: "openat", Path: name, Err: err}
 	}
 	// openat always returns a non-blocking handle.
-	return newFile(fd, joinPath(root.Name(), name), "file", false), nil
+	return newFile(fd, joinPath(root.Name(), name), kindOpenFile, false), nil
 }
 
 func openat(dirfd syscall.Handle, name string, flag int, perm FileMode) (syscall.Handle, error) {

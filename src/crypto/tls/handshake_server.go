@@ -357,7 +357,7 @@ func negotiateALPN(serverProtos, clientProtos []string, quic bool) (string, erro
 	if http11fallback {
 		return "", nil
 	}
-	return "", fmt.Errorf("tls: client requested unsupported application protocols (%s)", clientProtos)
+	return "", fmt.Errorf("tls: client requested unsupported application protocols (%q)", clientProtos)
 }
 
 // supportsECDHE returns whether ECDHE key exchanges can be used with this
@@ -520,8 +520,13 @@ func (hs *serverHandshakeState) checkForResumption() error {
 	if sessionHasClientCerts && c.config.ClientAuth == NoClientCert {
 		return nil
 	}
-	if sessionHasClientCerts && c.config.time().After(sessionState.peerCertificates[0].NotAfter) {
-		return nil
+	if sessionHasClientCerts {
+		now := c.config.time()
+		for _, c := range sessionState.peerCertificates {
+			if now.After(c.NotAfter) {
+				return nil
+			}
+		}
 	}
 	if sessionHasClientCerts && c.config.ClientAuth >= VerifyClientCertIfGiven &&
 		len(sessionState.verifiedChains) == 0 {
