@@ -7,6 +7,7 @@
 package os
 
 import (
+	"errors"
 	"runtime"
 	"slices"
 	"sync"
@@ -207,7 +208,7 @@ func rootRemoveAll(r *Root, name string) error {
 		return &PathError{Op: "RemoveAll", Path: name, Err: syscall.EINVAL}
 	}
 	_, err := doInRoot(r, name, nil, func(parent sysfdType, name string) (struct{}, error) {
-		return struct{}{}, removeAllFrom(parent, name)
+		return struct{}{}, errors.New("ertgo: not implemented")
 	})
 	if IsNotExist(err) {
 		return nil

@@ -923,6 +923,9 @@ type p struct {
 	// register state.
 	xRegs xRegPerP
 
+	// EDG: mark P as runnable in startm if max threads are reached
+	edgRunnable bool
+
 	// Padding is no longer needed. False sharing is now not a worry because p is large enough
 	// that its size class is an integer multiple of the cache line size (for any of our architectures).
 }
