@@ -11,7 +11,7 @@ import (
 )
 
 // HighPrecisionNow returns a high-resolution timestamp suitable for measuring
-// small time differences. It uses the time package's monotonic clock.
+// small time differences.
 //
 // Its unit, epoch, and resolution are unspecified, and may change, but can be
 // assumed to be sufficiently precise to measure time differences on the order
@@ -20,5 +20,5 @@ func HighPrecisionNow() int64 {
 	return monoTime()
 }
 
-//go:linkname monoTime
+//go:linkname monoTime runtime.cputicks
 func monoTime() int64

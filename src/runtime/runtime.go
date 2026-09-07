@@ -31,7 +31,6 @@ type ticksType struct {
 func (t *ticksType) init() {
 	lock(&ticks.lock)
 	t.startTime = nanotime()
-	t.startTicks = cputicks()
 	unlock(&ticks.lock)
 }
 

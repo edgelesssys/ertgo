@@ -1,4 +1,5 @@
 // Copyright 2014 The Go Authors. All rights reserved.
+// Copyright 2021 Edgeless Systems GmbH. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -946,6 +947,12 @@ func schedinit() {
 		//    just numCPUStartup).
 		procs = defaultGOMAXPROCS(numCPUStartup)
 	}
+
+	// EDG: get EGOMAXTHREADS
+	if n, err := strconv.ParseInt(gogetenv("EGOMAXTHREADS"), 10, 32); err == nil && n > 0 {
+		edgMaxThreads = int32(n)
+	}
+
 	if procresize(procs) != nil {
 		throw("unknown runnable goroutine during bootstrap")
 	}
@@ -1809,7 +1816,7 @@ func startTheWorldWithSema(now int64, w worldStop) int64 {
 			notewakeup(&mp.park)
 		} else {
 			// Start M to run P.  Do not start another M below.
-			newm(nil, p, -1)
+			p.edgRunnable = true
 		}
 	}
 
@@ -3018,6 +3025,37 @@ func stopm() {
 	}
 
 	lock(&sched.lock)
+
+	// EDG: Schedule a P marked as runnable in startm, if any.
+	lock(&allpLock)
+	lallp := len(allp)
+	if edgNextP >= lallp {
+		edgNextP = 0
+	}
+	for i := edgNextP; i < lallp; i++ {
+		p := allp[i]
+		if p.edgRunnable {
+			edgNextP = i + 1
+			p.edgRunnable = false
+			acquirep(p)
+			unlock(&allpLock)
+			unlock(&sched.lock)
+			return
+		}
+	}
+	for i := 0; i < edgNextP; i++ {
+		p := allp[i]
+		if p.edgRunnable {
+			edgNextP = i + 1
+			p.edgRunnable = false
+			acquirep(p)
+			unlock(&allpLock)
+			unlock(&sched.lock)
+			return
+		}
+	}
+	unlock(&allpLock)
+
 	mput(gp.m)
 	unlock(&sched.lock)
 	mPark()
@@ -3068,6 +3106,24 @@ func startm(pp *p, spinning, lockheld bool) {
 	if !lockheld {
 		lock(&sched.lock)
 	}
+
+	// EDG: limit max threads
+	if mcount() >= edgMaxThreads && sched.midle.empty() {
+		if pp != nil {
+			pp.edgRunnable = true
+			if spinning && sched.nmspinning.Add(-1) < 0 {
+				throw("startm: negative nmspinning")
+			}
+		} else if spinning {
+			throw("startm: P required for spinning=true")
+		}
+		if !lockheld {
+			unlock(&sched.lock)
+		}
+		releasem(mp)
+		return
+	}
+
 	if pp == nil {
 		if spinning {
 			// TODO(prattmic): All remaining calls to this function
@@ -3483,6 +3539,22 @@ top:
 	// local runq
 	if gp, inheritTime := runqget(pp); gp != nil {
 		return gp, inheritTime, false
+	}
+
+	// EDG: Schedule a P marked as runnable in startm, if any.
+	// This prevents starving of those Ps in cases where the global runq is never empty.
+	if !mp.spinning && atomic.Xadd(&edgSchedP, 1)%8 == 0 {
+		lock(&allpLock)
+		for _, p := range allp {
+			if p.edgRunnable {
+				releasep()
+				pp.edgRunnable = true
+				unlock(&allpLock)
+				stopm()
+				goto top
+			}
+		}
+		unlock(&allpLock)
 	}
 
 	// global runq
