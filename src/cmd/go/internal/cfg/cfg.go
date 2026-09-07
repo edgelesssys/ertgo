@@ -178,7 +178,7 @@ func defaultContext() build.Context {
 		}
 	}
 	ctxt.CgoEnabled = defaultCgoEnabled
-	if v := Getenv("CGO_ENABLED"); v == "0" || v == "1" {
+	if v := Getenv("EGO_ENABLED"); v == "0" || v == "1" {
 		ctxt.CgoEnabled = v[0] == '1'
 	}
 	CGOChanged = ctxt.CgoEnabled != defaultCgoEnabled

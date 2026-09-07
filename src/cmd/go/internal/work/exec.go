@@ -599,7 +599,6 @@ func (b *Builder) checkCacheForBuild(a, buildAction *Action, covMetaFileName str
 	}
 
 	if p.Module != nil && !allowedVersion(p.Module.GoVersion) {
-		return nil, errors.New("module requires Go " + p.Module.GoVersion + " or later")
 	}
 
 	if err := b.checkDirectives(buildAction); err != nil {
